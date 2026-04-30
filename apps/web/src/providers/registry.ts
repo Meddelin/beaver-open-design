@@ -234,12 +234,37 @@ export async function fetchProjectFilePreview(
 export async function fetchProjectFileText(
   projectId: string,
   name: string,
+  options?: { cache?: RequestCache; cacheBustKey?: string | number },
 ): Promise<string | null> {
+  const url = projectFileUrl(projectId, name);
+  const cacheBustKey = options?.cacheBustKey;
+  const requestUrl =
+    cacheBustKey == null
+      ? url
+      : `${url}${url.includes('?') ? '&' : '?'}cacheBust=${encodeURIComponent(String(cacheBustKey))}`;
+  const init: RequestInit = {};
+  if (options?.cache) init.cache = options.cache;
+
   try {
-    const resp = await fetch(projectFileUrl(projectId, name));
-    if (!resp.ok) return null;
+    const resp = await fetch(requestUrl, init);
+    if (!resp.ok) {
+      console.warn('[fetchProjectFileText] failed:', {
+        name,
+        projectId,
+        status: resp.status,
+        statusText: resp.statusText,
+        url: requestUrl,
+      });
+      return null;
+    }
     return await resp.text();
-  } catch {
+  } catch (err) {
+    console.warn('[fetchProjectFileText] failed:', {
+      error: err,
+      name,
+      projectId,
+      url: requestUrl,
+    });
     return null;
   }
 }
