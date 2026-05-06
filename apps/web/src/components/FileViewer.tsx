@@ -32,7 +32,7 @@ import {
   exportReactComponentAsZip,
   openSandboxedPreviewInNewTab,
 } from '../runtime/exports';
-import { buildReactComponentSrcdoc } from '../runtime/react-component';
+import { buildBeaverComponentSrcdoc } from '../runtime/beaver-component';
 import { buildSrcdoc } from '../runtime/srcdoc';
 import { parseForceInline, shouldUrlLoadHtmlPreview } from './file-viewer-render-mode';
 import { saveTemplate } from '../state/projects';
@@ -1795,7 +1795,7 @@ function ReactComponentViewer({
 
     let cancelled = false;
     const buildSrcDoc = () => {
-      const nextSrcDoc = buildReactComponentSrcdoc(source, { title: exportTitle });
+      const nextSrcDoc = buildBeaverComponentSrcdoc(source, { title: exportTitle });
       if (!cancelled) setSrcDoc(nextSrcDoc);
     };
 

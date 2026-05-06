@@ -1,0 +1,9 @@
+{
+  "$schema": "./components.schema.json",
+  "generatedAt": null,
+  "generatedBy": "@beaver-open-design/spec-extractor",
+  "beaverVersion": null,
+  "innerDsVersion": null,
+  "components": [],
+  "tokens": {}
+}

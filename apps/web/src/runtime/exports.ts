@@ -13,7 +13,7 @@
 // artifact server-side, so it lives in ProjectView.tsx (not here).
 
 import { buildSrcdoc, type SrcdocOptions } from './srcdoc';
-import { buildReactComponentSrcdoc } from './react-component';
+import { buildBeaverComponentSrcdoc } from './beaver-component';
 import { buildZip } from './zip';
 
 function safeFilename(name: string, fallback: string): string {
@@ -78,7 +78,7 @@ export function exportAsJsx(
 }
 
 export function exportReactComponentAsHtml(source: string, title: string): void {
-  const doc = buildReactComponentSrcdoc(source, { title });
+  const doc = buildBeaverComponentSrcdoc(source, { title });
   const blob = new Blob([doc], { type: 'text/html;charset=utf-8' });
   triggerDownload(blob, `${safeFilename(title, 'component')}.html`);
 }

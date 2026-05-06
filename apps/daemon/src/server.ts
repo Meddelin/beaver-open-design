@@ -3570,6 +3570,32 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         ? (getTemplate(db, metadata.templateId) ?? undefined)
         : undefined;
 
+    // Beaver fork: every project pins the same allow-list (components.json
+    // + tokens.md from the active skill dir). Loaded here so the composer
+    // can inline it last in the prompt stack. If the skill folder doesn't
+    // exist or beaver:sync hasn't run yet, we pass undefined — the composer
+    // renders a clear "run beaver:sync" message in that case.
+    let beaverComponentsJson;
+    let beaverTokensMarkdown;
+    if (activeSkillDir) {
+      try {
+        beaverComponentsJson = fs.readFileSync(
+          path.join(activeSkillDir, 'components.json'),
+          'utf8',
+        );
+      } catch {
+        beaverComponentsJson = undefined;
+      }
+      try {
+        beaverTokensMarkdown = fs.readFileSync(
+          path.join(activeSkillDir, 'references', 'tokens.md'),
+          'utf8',
+        );
+      } catch {
+        beaverTokensMarkdown = undefined;
+      }
+    }
+
     const prompt = composeSystemPrompt({
       agentId,
       includeCodexImagegenOverride: false,
@@ -3582,6 +3608,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       craftSections,
       metadata,
       template,
+      beaverComponentsJson,
+      beaverTokensMarkdown,
     });
     // The chat handler also needs to know where the active skill lives
     // on disk so it can stage a per-project copy of its side files

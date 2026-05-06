@@ -1,6 +1,6 @@
 {
-  "name": "open-design",
-  "version": "0.4.1",
+  "name": "beaver-open-design",
+  "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.33.2",
   "type": "module",
@@ -13,6 +13,9 @@
     "postinstall": "node ./scripts/postinstall.mjs",
     "tools-dev": "pnpm exec tools-dev",
     "tools-pack": "pnpm exec tools-pack",
+    "beaver:sync": "pnpm --filter @beaver-open-design/spec-extractor dev --",
+    "beaver:build-runtime": "pnpm --filter @beaver-open-design/beaver-runtime build",
+    "beaver:refresh": "pnpm beaver:sync && pnpm beaver:build-runtime",
     "guard": "tsx ./scripts/guard.ts",
     "i18n:check": "tsx ./scripts/i18n-check.ts",
     "sync:community-pets": "node --experimental-strip-types scripts/sync-community-pets.ts",

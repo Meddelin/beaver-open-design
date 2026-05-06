@@ -1,0 +1,24 @@
+{
+  "name": "@beaver-open-design/spec-extractor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI: scan local Beaver UI + inner-DS checkouts and emit skills/beaver-prototype/components.json plus per-component reference Markdown.",
+  "type": "module",
+  "bin": {
+    "beaver-sync": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.2",
+    "ts-morph": "^24.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "tsx": "4.21.0",
+    "typescript": "^5.6.3"
+  }
+}
