@@ -18,3 +18,4 @@ export * from './sse/chat';
 export * from './sse/proxy';
 export * from './prompts/system';
 export * from './critique';
+export * from './beaver-validator';

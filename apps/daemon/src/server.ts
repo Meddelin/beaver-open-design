@@ -3570,13 +3570,13 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         ? (getTemplate(db, metadata.templateId) ?? undefined)
         : undefined;
 
-    // Beaver fork: every project pins the same allow-list (components.json
-    // + tokens.md from the active skill dir). Loaded here so the composer
-    // can inline it last in the prompt stack. If the skill folder doesn't
-    // exist or beaver:sync hasn't run yet, we pass undefined — the composer
-    // renders a clear "run beaver:sync" message in that case.
+    // Beaver fork v2: composer parses components.json into a lean component
+    // index (names by package, ~30 KB), it does NOT inline the full manifest
+    // into the prompt anymore (which used to be 500 KB and exhaust the
+    // context). Tokens are no longer injected at all — model fetches them
+    // lazily through beaver_list_token_groups + beaver_get_tokens tools. If
+    // beaver:sync hasn't run, the index renders a "run beaver:sync" stub.
     let beaverComponentsJson;
-    let beaverTokensMarkdown;
     if (activeSkillDir) {
       try {
         beaverComponentsJson = fs.readFileSync(
@@ -3585,14 +3585,6 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         );
       } catch {
         beaverComponentsJson = undefined;
-      }
-      try {
-        beaverTokensMarkdown = fs.readFileSync(
-          path.join(activeSkillDir, 'references', 'tokens.md'),
-          'utf8',
-        );
-      } catch {
-        beaverTokensMarkdown = undefined;
       }
     }
 
@@ -3609,7 +3601,6 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       metadata,
       template,
       beaverComponentsJson,
-      beaverTokensMarkdown,
     });
     // The chat handler also needs to know where the active skill lives
     // on disk so it can stage a per-project copy of its side files

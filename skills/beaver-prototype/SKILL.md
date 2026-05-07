@@ -1,11 +1,11 @@
 ---
 name: beaver-prototype
 description: |
-  Single-file React + TypeScript prototype built EXCLUSIVELY from the
-  Beaver UI design system (`@beaver-ui/*`). Components, props, and tokens
-  are pulled from a generated manifest synced from the live Beaver source
-  repository. No raw HTML, no third-party libraries, no improvised
-  components.
+  React + TypeScript single-file prototype rendered against the live Beaver
+  UI runtime. The prototype uses Beaver components as its primary surface
+  and inner-DS primitives as a fallback when Beaver does not have what's
+  needed. Component / prop / token details are pulled by tool calls, not
+  baked into the prompt.
 triggers:
   - "prototype"
   - "mockup"
@@ -29,161 +29,153 @@ od:
 
 # Beaver UI Prototype Skill
 
-Produce a single self-contained `index.tsx` prototype that renders against the
-live Beaver UI runtime. The runtime is a pre-built UMD bundle that exposes
-every Beaver component, every primitive of the underlying inner DS that
-Beaver consumes, and the design tokens — all on `window.Beaver`.
+This skill produces a single self-contained `index.tsx` that renders
+against the live Beaver UI runtime. The runtime is a pre-built UMD that
+exposes every Beaver component, every primitive of the inner DS Beaver
+consumes, and the design tokens — all on `window.Beaver`.
 
-You are **not** writing CSS from scratch. You are **not** using arbitrary HTML
-elements. You are composing Beaver components.
+You are **not** writing CSS from scratch. You are **not** using arbitrary
+HTML elements. You are composing components that already exist.
+
+The base prompt and discovery layer (above this skill in your context)
+already cover the conversation flow and the six hard rules. This skill
+adds the composition workflow specific to the "Beaver UI prototype" use
+case.
+
+## Workflow
+
+### Step 0 — Discovery and vocalization
+
+This is owned by the discovery layer. By the time you start composing,
+you should already have answered: type of screen, primary use-case, data
+shape, required states, interaction points. If you skipped discovery,
+go back and do it.
+
+### Step 1 — Decompose the screen into roles
+
+Before reaching for any component name, write down the abstract roles
+the screen needs:
+
+- shell (page chrome)
+- top navigation
+- side navigation (if any)
+- subheader (if any)
+- main content slot
+- sub-component for each section type (table, card grid, form, …)
+- modal / drawer / overlay (if any)
+- empty state (if requested in turn 1)
+
+Roles are layout-level. Don't pick component names yet.
+
+### Step 2 — Map roles to components via tools
+
+For each role:
+
+1. `beaver_search_components(role + intent)` — e.g. "main page shell",
+   "data table with filters", "card with header and actions".
+2. Read the top 3-5 results. They come ordered with Beaver primary first.
+3. If a Beaver component fits the role, pick it.
+4. If nothing in Beaver fits, search again with broader keywords. If still
+   nothing, only then look at fallback (`tier: 'fallback'`) results from
+   inner-DS.
+5. If neither has a fit, this is the "stop and ask" moment — name what's
+   missing and ask the user. Do not invent.
+
+For each chosen component:
+
+- `beaver_get_component_spec(name)` — read the full spec. Note required
+  props, enum values, sub-components from the same package.
+- If the spec mentions `referencedTypes`, fetch those too — the type
+  values may be enum strings you'll need.
+
+### Step 3 — Tokens
+
+For any visual values that aren't already exposed by component props
+(spacings between layout regions, accent colors when picking a CTA
+variant, transition durations, etc.):
+
+- `beaver_list_token_groups()` — see what groups exist.
+- `beaver_get_tokens(group)` — fetch the actual values.
+- Use these via `import { spacing, color } from '@inner-ds/design-tokens'`
+  (or sub-paths like `/colors`).
+
+If the visual decision could be implemented either via a token or via
+an inline value — token wins, every time. No exceptions.
+
+### Step 4 — TodoWrite for anything multi-section
+
+If the screen has more than one major region, kick off TodoWrite with
+the build sequence. Update `in_progress → completed` as you finish
+each region. The user sees this stream live; it's their progress
+indicator.
+
+### Step 5 — Compose, starting from the seed
+
+`assets/template.tsx` is the smallest valid starting shape (Layout +
+Header + Box). Copy it, then fill in. Build outermost-first:
+
+1. Outer shell.
+2. Top-level regions inside shell.
+3. Per-region content.
+4. Modal / drawer / overlay branches last.
+5. Empty / loading / error state branches.
+
+For sub-components (e.g. `HeaderTitle`, `SubheaderObjectTitle`): import
+them in the same `import { … } from '@beaver-ui/<package>'` line as their
+parent. They are NOT accessed via dot-notation (`Header.Title` is not a
+Beaver pattern — always explicit named imports).
+
+### Step 6 — Pre-emit dry_run
+
+`beaver_dry_run(source)` is mandatory. The runtime will compile your TSX
+with the real Beaver bundle in a headless environment and surface any
+runtime error before the user sees it.
+
+- `{ ok: true }` → emit the artifact.
+- `{ ok: false, error }` → fix and rerun.
+
+Most common dry_run failures and their fix:
+
+- `X is not defined`: missing import. Check whether `X` is a sub-component
+  of a parent you imported and add it to the same import statement.
+- `Cannot read properties of undefined`: wrong prop access path; recheck
+  spec.
+- "Element type is invalid": something resolved to undefined in JSX,
+  usually a typo in a component name.
+- Babel parse error with line/col: a syntactic issue. Read the cited line
+  carefully — most often a missing backtick on a template literal, or an
+  unclosed JSX tag.
+
+### Step 7 — Self-check (visible in chat)
+
+Before emitting, write a short 5-bullet self-check in plain text so the
+user sees your reasoning. Already covered in the discovery layer; do not
+skip this step in the artifact-emit turn.
+
+### Step 8 — Emit
+
+`<artifact kind="react-component" entry="index.tsx">` block, single file,
+default-export `Prototype`, imports at top, no narration after `</artifact>`.
 
 ## Resource map
 
 ```
 beaver-prototype/
-├── SKILL.md                          ← you're reading this
+├── SKILL.md                          ← this file
 ├── assets/
 │   └── template.tsx                  ← seed: minimal Layout + Header + Box (READ FIRST)
-├── components.json                   ← THE allow-list (auto-generated by `pnpm beaver:sync`)
+├── components.json                   ← lean manifest (names + package + tier + kind), auto-generated
+├── specs/<Component>.json            ← full per-component spec, fetched via tool, auto-generated
+├── tokens/<group>.json               ← per-group token values, fetched via tool, auto-generated
+├── docs/<package>/<name>.md          ← per-component description corpus, auto-generated
 └── references/
-    ├── index.md                      ← grouped catalog of every component, by tier
-    ├── components/<Name>.md          ← per-component spec: props, variants, examples
-    ├── layouts/<pattern>.tsx         ← hand-curated section recipes (hero, table page, ...)
-    └── tokens.md                     ← every available token from `@<inner-ds>/design-tokens`
+    └── layouts/                      ← hand-curated TSX recipes for common screen patterns
 ```
 
-## Hard rules — non-negotiable
+`components.json`, `specs/*`, `tokens/*`, `docs/**` are all generated by
+`pnpm beaver:sync`. Don't edit them manually — your edits will be
+overwritten.
 
-1. **Imports come ONLY from this allow-list of package prefixes:**
-   - `@beaver-ui/...` — primary surface. Always prefer these.
-   - `@<inner-ds>/components` (and sub-packages) — primitives of the DS Beaver
-     consumes. Use only when no Beaver component fits and a Beaver primitive
-     composition cannot work either.
-   - `@<inner-ds>/design-tokens` — the only legal source of style values.
-   - `react`, `react-dom` — fine for hooks, refs, Fragment.
-
-   Any other import (a UI library, a charting lib, raw CDN URL) is a hard fail.
-
-2. **Components and props ONLY from `components.json`.** If a component is not
-   in the manifest, it does not exist. If a prop or a variant is not in the
-   manifest, it does not exist. Do not invent. Do not "extend with className".
-
-3. **No raw HTML.** No `<div>`, no `<section>`, no `<h1>`, no `<button>`.
-   The only allowed JSX intrinsic is `<>` (`React.Fragment`). Use `Box`,
-   `Flex`, `Grid`, `Layout`, `Typography`, `Button` etc.
-
-4. **No hardcoded style values.** No `style={{ padding: '13px' }}`. No
-   `style={{ color: '#ff0000' }}`. Every style override MUST come from
-   `import { colors, spacing, typography, animation } from '@<inner-ds>/design-tokens'`.
-   When in doubt, prefer a Beaver component prop over inline `style`.
-
-## Workflow
-
-### Step 0 — Pre-flight (read these BEFORE writing any code)
-
-Skipping this step is the single biggest cause of unusable output.
-
-1. **`assets/template.tsx`** — the seed. Always start here.
-2. **`components.json`** — the closed set of components, by `tier`:
-   - `tier: "preferred"` — Beaver components. Always your first choice.
-   - `tier: "primitive"` — inner-DS components, available only as a fallback.
-3. **`references/index.md`** — quick scan to find what exists. If a component
-   you'd reach for doesn't appear here, it doesn't exist.
-4. **`references/tokens.md`** — review available tokens before writing any
-   style overrides.
-
-### Step 1 — Plan
-
-State your screen rhythm in plain language to the user **before writing the
-file**. Example: "Хочу собрать: `Header` с поиском → `SideNavigation` слева →
-основная зона: `Subheader` + `FilterTable` с действиями в `ActionBar`."
-
-If the user asked for something that doesn't map cleanly to existing
-components, surface that now — don't bury it inside the artifact.
-
-### Step 2 — Compose
-
-Copy `assets/template.tsx` and start filling. For any non-trivial section
-(hero, dashboard table, form modal, ...), pull the recipe from
-`references/layouts/<pattern>.tsx` rather than inventing layout.
-
-For each component you place, open `references/components/<Name>.md` and
-verify the props you're using.
-
-### Step 3 — Fallback ladder (strict order, no skipping)
-
-When a user request doesn't have a direct Beaver component:
-
-1. **First** — Beaver component that approximates. Read the manifest carefully;
-   often the right component is named differently than the user expects.
-2. **Second** — composition of Beaver primitives: `Box`, `Flex`, `Grid`,
-   `Layout`, plus child Beaver components. Most "missing" components can be
-   built this way (e.g. a "Stats card" = `Box` + `Typography` + `Flex`).
-3. **Third** — primitive from `@<inner-ds>/components` (`tier: primitive` in
-   the manifest). Use ONLY when (1) and (2) genuinely don't fit. When you
-   take this path, write a one-line code comment explaining why no Beaver
-   option works.
-4. **Stop**. If even (3) doesn't cover it (a custom chart, a bespoke
-   animation, an SVG illustration, a third-party widget), do **not** write
-   the code. Reply to the user explaining what's missing and ask for
-   permission to either (a) ship a Beaver `Box` placeholder with a TODO, or
-   (b) write a custom component just this once. Wait for their answer.
-
-### Step 4 — Self-check (before emitting `<artifact>`)
-
-Walk this list. If any item fails, fix and re-walk.
-
-- [ ] Every `import` matches an allow-list prefix from rule #1.
-- [ ] Every component name appears in `components.json`.
-- [ ] Every prop value matches the type / enum from the per-component spec.
-- [ ] No `<div>`, `<span>`, `<button>`, `<h1>`-`<h6>` in the JSX. Only Beaver
-      components and `<>`.
-- [ ] No literal style values (no hex colors, no px values, no font names).
-      All overrides come from `@<inner-ds>/design-tokens` imports.
-- [ ] If you took fallback step (3) or (4), you justified it explicitly in
-      a comment or in chat.
-
-### Step 5 — Emit artifact
-
-Wrap the final TSX in:
-
-````
-<artifact kind="react-component" entry="index.tsx">
-```tsx
-... your code ...
-```
-</artifact>
-````
-
-A single file. A single default export `Prototype`. Hooks/helpers stay in the
-same file — do not request multiple files.
-
-## Skeleton example
-
-```tsx
-import { Layout } from '@beaver-ui/layout';
-import { Header } from '@beaver-ui/header';
-import { SideNavigation } from '@beaver-ui/side-navigation';
-import { Subheader } from '@beaver-ui/subheader';
-import { Table } from '@beaver-ui/table';
-import { Box } from '@beaver-ui/box';
-import { Flex } from '@beaver-ui/flex';
-import { spacing } from '@<inner-ds>/design-tokens';
-
-export default function Prototype() {
-  return (
-    <Layout>
-      <Header />
-      <Flex gap={spacing.m}>
-        <SideNavigation />
-        <Box>
-          <Subheader title="Заявки" />
-          <Table {...} />
-        </Box>
-      </Flex>
-    </Layout>
-  );
-}
-```
-
-Replace the placeholders only with values that exist in `components.json`.
+`references/layouts/*.tsx` are hand-written and survive sync runs. Use
+them as starting points for common patterns (hero, dashboard, table page,
+form modal, etc).

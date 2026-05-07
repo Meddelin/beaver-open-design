@@ -1,23 +1,33 @@
 /**
  * Build a sandboxed iframe srcdoc that renders a Beaver UI prototype.
  *
- * This is the Beaver-fork twin of `react-component.ts`. The difference is
- * that user TSX is allowed to import from `@beaver-ui/*`,
- * `@<inner-ds>/components`, and `@<inner-ds>/design-tokens`, plus `react`
- * and `react/jsx-runtime`. Imports from any other source produce an error
- * page (so the LLM gets a clear signal to fix its output).
+ * v2 design: the iframe does NOT show errors to the user. Any failure
+ * (Babel parse, runtime exception, missing component, missing import) is
+ * forwarded to the parent window via `postMessage` with type
+ * `od:beaver-runtime-error`. The web app's chat layer handles auto-correction
+ * (sends the error back to the agent, hides the broken iframe behind the
+ * "model is working" indicator, swaps in the new artifact when it lands).
  *
- * The pipeline:
- *   1. Pre-process the TSX source: convert allowed non-React imports into
- *      `const { … } = window.Beaver(…)` lines, validate any leftover
- *      `import` statements against the allow-list.
- *   2. Reuse the existing `prepareReactComponentSource` to strip the
- *      remaining React imports and rewrite the default export into a
- *      `window.__OpenDesignComponent` assignment.
- *   3. Emit an HTML document that loads (in order): React UMD, ReactDOM
- *      UMD, Babel standalone, then Beaver's UMD + CSS, then a small
- *      bootstrap that Babel-transforms the prepared source and mounts the
- *      component into `#root`.
+ * The user only sees iframes that successfully rendered. Anything in
+ * between is hidden behind the same loading state as fresh generation.
+ *
+ * Code-side validation is intentionally minimal:
+ *   - The Babel transform is the only "validator" that runs synchronously.
+ *     Its purpose is parseability — without it nothing renders.
+ *   - There is no import whitelist check, no manifest cross-check, no
+ *     JSX-tag coverage check. If the LLM imported a nonexistent component,
+ *     it'll throw at runtime ("Foo is not defined") and the auto-correction
+ *     loop will pick that up. Code that tries to predict what the model
+ *     should or shouldn't do gets in the way and creates false positives.
+ *
+ * Pipeline (in iframe):
+ *   1. Pre-process TSX: rewrite `@beaver-ui/*` and `@<inner>/*` imports
+ *      into `const { … } = window.Beaver(.tokens)?` destructurings.
+ *   2. `prepareReactComponentSource` strips React imports and turns the
+ *      default export into `window.__OpenDesignComponent`.
+ *   3. Babel transforms TSX → JS with `presets: ['typescript', 'react']`.
+ *   4. eval + ReactDOM.createRoot mount.
+ *   5. Any failure at any step → postMessage to parent.
  */
 import { prepareReactComponentSource } from './react-component';
 
@@ -27,6 +37,12 @@ interface BeaverComponentSrcdocOptions {
   beaverRuntimeUrl?: string;
   /** Path or absolute URL to the Beaver runtime stylesheet. Defaults to `/vendor/beaver.css`. */
   beaverStylesheetUrl?: string;
+  /**
+   * Identifier the parent will see in postMessage events to correlate the
+   * iframe instance with a chat / artifact run. Optional; if omitted, the
+   * parent has to disambiguate by event source alone.
+   */
+  artifactId?: string;
 }
 
 const REACT_DEV_URL = 'https://unpkg.com/react@18.3.1/umd/react.development.js';
@@ -38,17 +54,28 @@ const BABEL_STANDALONE_URL =
 const BEAVER_RUNTIME_URL_DEFAULT = '/vendor/beaver.umd.js';
 const BEAVER_STYLESHEET_URL_DEFAULT = '/vendor/beaver.css';
 
+/**
+ * Allowed import prefixes for the runtime rewriter. v2 keeps this list as a
+ * runtime *resolver* concern (we need to know which destructure root to
+ * use), not a *security* one — non-allowlisted imports are not rejected
+ * here; they pass through to runtime where they fail with "is not defined".
+ * That failure routes through the auto-correction loop.
+ *
+ * Inner-DS scope: replace `@inner-ds/` with the actual scope after
+ * `pnpm install` resolves the Beaver dep graph. See AGENTS.md / README.
+ */
 const ALLOWED_IMPORT_PREFIXES = [
   '@beaver-ui/',
-  // The inner-DS scope is filled in once `apps/beaver-runtime/src/index.ts`
-  // is wired against an actual scope. Callers can pass extra prefixes via
-  // `BEAVER_EXTRA_ALLOWED_PREFIXES` env at build time if they need to lock
-  // a different scope name.
   '@inner-ds/',
 ] as const;
 
 const TOKENS_PACKAGE_SUFFIX = '/design-tokens';
 
+/**
+ * @deprecated In v2 the runtime no longer rejects non-allowlisted imports
+ * eagerly. Kept as an export so any old call site (e.g. tests) compiles;
+ * remove after a follow-up cleanup pass.
+ */
 export class BeaverImportError extends Error {
   constructor(
     public readonly source: string,
@@ -58,30 +85,51 @@ export class BeaverImportError extends Error {
   }
 }
 
+/**
+ * Postmessage event types emitted by the iframe to the parent.
+ *
+ *   od:beaver-runtime-ready    — bundle and React loaded, ready to render.
+ *   od:beaver-runtime-error    — Babel parse / runtime exception. Parent
+ *                                 should NOT show this to the user; it
+ *                                 should forward to the agent loop as a
+ *                                 correction request and keep the
+ *                                 "generating" indicator visible.
+ *   od:beaver-runtime-rendered — render succeeded. Parent reveals the
+ *                                 iframe to the user.
+ */
+export const BEAVER_RUNTIME_READY = 'od:beaver-runtime-ready';
+export const BEAVER_RUNTIME_ERROR = 'od:beaver-runtime-error';
+export const BEAVER_RUNTIME_RENDERED = 'od:beaver-runtime-rendered';
+
 export function buildBeaverComponentSrcdoc(
   source: string,
   options: BeaverComponentSrcdocOptions,
 ): string {
-  let prepared: string;
-  let importError: BeaverImportError | null = null;
+  // Pre-iframe TSX rewriting. If this throws, we still emit a valid HTML
+  // doc — but with a script that immediately postMessages the error. We
+  // never render an inline error UI; the parent handles user-facing UX.
+  let prepared = '';
+  let preMountError: { phase: string; message: string } | null = null;
   try {
     const rewritten = rewriteBeaverImports(source);
     prepared = prepareReactComponentSource(rewritten);
   } catch (err) {
-    importError = err instanceof BeaverImportError ? err : null;
-    prepared = '';
+    preMountError = {
+      phase: 'pre-mount',
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
 
   const safeTitle = escapeHtml(options.title || 'Beaver prototype');
   const beaverRuntimeUrl = options.beaverRuntimeUrl ?? BEAVER_RUNTIME_URL_DEFAULT;
   const beaverStylesheetUrl =
     options.beaverStylesheetUrl ?? BEAVER_STYLESHEET_URL_DEFAULT;
-
-  if (importError) {
-    return errorPageHtml(safeTitle, importError.message);
-  }
-
+  const artifactIdJson = JSON.stringify(options.artifactId ?? null);
   const sourceJson = JSON.stringify(prepared);
+  const preMountErrorJson = JSON.stringify(preMountError);
+  const eventReady = JSON.stringify(BEAVER_RUNTIME_READY);
+  const eventError = JSON.stringify(BEAVER_RUNTIME_ERROR);
+  const eventRendered = JSON.stringify(BEAVER_RUNTIME_RENDERED);
 
   return `<!doctype html>
 <html>
@@ -95,16 +143,6 @@ export function buildBeaverComponentSrcdoc(
       * { box-sizing: border-box; }
       html, body, #root { min-height: 100%; margin: 0; }
       body { background: #fff; color: #111827; }
-      .od-react-error {
-        margin: 16px;
-        padding: 14px 16px;
-        border: 1px solid #fecaca;
-        border-radius: 8px;
-        background: #fff1f2;
-        color: #991b1b;
-        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-        white-space: pre-wrap;
-      }
     </style>
   </head>
   <body>
@@ -115,22 +153,61 @@ export function buildBeaverComponentSrcdoc(
     <script src="${escapeAttr(beaverRuntimeUrl)}"></script>
     <script>
       (function(){
-        var root = document.getElementById('root');
-        function showError(err) {
-          root.innerHTML = '';
-          var el = document.createElement('pre');
-          el.className = 'od-react-error';
-          el.textContent = err && (err.stack || err.message) ? (err.stack || err.message) : String(err);
-          root.appendChild(el);
+        var artifactId = ${artifactIdJson};
+        var ROOT = document.getElementById('root');
+
+        function post(type, payload) {
+          try {
+            var data = Object.assign({ type: type, artifactId: artifactId }, payload || {});
+            window.parent.postMessage(data, '*');
+          } catch (_) {}
         }
+
+        function reportError(phase, err) {
+          var message = (err && (err.message || err.toString())) || String(err);
+          var stack = err && err.stack ? String(err.stack) : null;
+          // Common runtime patterns we surface explicitly so the parent (or
+          // the auto-correction prompt) has cleaner signal:
+          //  - "X is not defined"            → likely missing import
+          //  - "Cannot read properties of undefined" → likely wrong prop access
+          //  - "Element type is invalid"     → undefined component in JSX
+          var hint = null;
+          var notDefined = /^([A-Z][A-Za-z0-9_]*) is not defined$/.exec(message);
+          if (notDefined) {
+            hint = {
+              kind: 'missing-import',
+              symbol: notDefined[1],
+              suggestion: 'Component "' + notDefined[1] + '" is referenced in JSX but not imported (or not exported by any allowed package). Add an import or remove the reference.'
+            };
+          } else if (/Element type is invalid/.test(message)) {
+            hint = { kind: 'invalid-element-type', suggestion: 'A JSX element resolved to undefined — usually a missing import or wrong destructuring.' };
+          } else if (/Minified React error #130/.test(message)) {
+            hint = { kind: 'invalid-element-type', suggestion: 'React received undefined as a component. Check imports and component names.' };
+          } else if (/Unexpected token/.test(message) || /Missing semicolon/.test(message)) {
+            hint = { kind: 'parse-error', suggestion: 'TSX failed to parse. Check template literals (must be inside backticks), unclosed JSX, missing parentheses.' };
+          }
+          post(${eventError}, { phase: phase, message: message, stack: stack, hint: hint });
+        }
+
+        // Pre-mount error from rewriteBeaverImports / prepareReactComponentSource —
+        // surfaced before runtime even starts.
+        var preMountError = ${preMountErrorJson};
+        if (preMountError) {
+          reportError(preMountError.phase, new Error(preMountError.message));
+          return;
+        }
+
         if (!window.React || !window.ReactDOM || !window.Babel) {
-          showError(new Error('React preview runtime failed to load.'));
+          reportError('runtime-load', new Error('React/ReactDOM/Babel UMD failed to load. Check network access from sandbox iframe.'));
           return;
         }
         if (!window.Beaver) {
-          showError(new Error('Beaver runtime not loaded. Did you run "pnpm beaver:build-runtime"? Expected a UMD at ${beaverRuntimeUrl}.'));
+          reportError('runtime-load', new Error('Beaver runtime not loaded at ${beaverRuntimeUrl}. Run pnpm beaver:build-runtime.'));
           return;
         }
+
+        post(${eventReady});
+
         var compiled;
         try {
           compiled = window.Babel.transform(${sourceJson}, {
@@ -138,23 +215,38 @@ export function buildBeaverComponentSrcdoc(
             presets: ['typescript', 'react'],
           }).code;
         } catch (err) {
-          showError(err);
+          reportError('babel-transform', err);
           return;
         }
+
         try {
-          // User-authored JSX runs only inside this sandboxed iframe. The parent omits
-          // allow-same-origin, so runtime effects are confined to the preview document.
+          // User TSX runs in this sandboxed iframe (no allow-same-origin).
           (0, eval)(compiled);
           var Component = window.__OpenDesignComponent ||
             (typeof Prototype !== 'undefined' ? Prototype : null) ||
             (typeof App !== 'undefined' ? App : null);
           if (!Component) {
-            throw new Error('No React component export found. Export a default component named Prototype.');
+            throw new Error('No React component export found. The artifact must default-export a component named Prototype.');
           }
-          window.ReactDOM.createRoot(root).render(window.React.createElement(Component));
+          window.ReactDOM.createRoot(ROOT).render(window.React.createElement(Component));
+          // We can't tell synchronously whether render itself threw — React
+          // logs that via its dev runtime which we can't easily intercept
+          // without plumbing in an error boundary. As a pragmatic signal,
+          // post "rendered" after a microtask: if render threw synchronously,
+          // the catch block above fires first.
+          Promise.resolve().then(function(){ post(${eventRendered}); });
         } catch (err) {
-          showError(err);
+          reportError('mount', err);
         }
+
+        // Catch any uncaught errors that escape our try/catch (async, event
+        // handler from user code, etc).
+        window.addEventListener('error', function(ev){
+          reportError('uncaught', ev.error || new Error(ev.message || 'unknown'));
+        });
+        window.addEventListener('unhandledrejection', function(ev){
+          reportError('unhandled-rejection', ev.reason || new Error('unhandled promise rejection'));
+        });
       })();
     </script>
   </body>
@@ -162,13 +254,19 @@ export function buildBeaverComponentSrcdoc(
 }
 
 /**
- * Rewrite `import { Foo } from '@beaver-ui/<pkg>'` lines into
- * `const { Foo } = window.Beaver;`. Tokens imports go to
- * `window.Beaver.tokens`. Throws BeaverImportError on disallowed sources.
+ * Rewrite `import { Foo } from '@beaver-ui/<pkg>'` and inner-DS imports
+ * into `const { Foo } = window.Beaver;` (or `window.Beaver.tokens` for
+ * `/design-tokens` paths).
  *
- * Imports from `react` / `react/jsx-runtime` are left untouched here — the
- * downstream `prepareReactComponentSource` rewrites them to point at
- * `window.React`.
+ * v2 policy: this is a runtime *resolver*, not a *security gate*. Imports
+ * from non-allowlisted sources are passed through unchanged — they then
+ * fail at runtime as "module not found" or "X is not defined", which
+ * routes through the auto-correction loop. Validating in code only
+ * duplicates what runtime does and produces false positives.
+ *
+ * Imports from `react` / `react-dom` / `react/jsx-runtime` are also passed
+ * through untouched; the downstream `prepareReactComponentSource` rewrites
+ * them to point at `window.React`.
  */
 export function rewriteBeaverImports(source: string): string {
   const lines = source.split(/\r?\n/);
@@ -184,22 +282,29 @@ export function rewriteBeaverImports(source: string): string {
     }
     const [, specifier, sourcePath] = importMatch as [string, string, string];
 
-    if (sourcePath === 'react' || sourcePath === 'react-dom' || sourcePath === 'react/jsx-runtime') {
+    // React imports — passthrough, prepareReactComponentSource handles them.
+    if (
+      sourcePath === 'react' ||
+      sourcePath === 'react-dom' ||
+      sourcePath === 'react/jsx-runtime'
+    ) {
       out.push(line);
       continue;
     }
 
-    const allowed = ALLOWED_IMPORT_PREFIXES.some((prefix) => sourcePath.startsWith(prefix));
-    if (!allowed) {
-      throw new BeaverImportError(
-        sourcePath,
-        `imports must be from react, @beaver-ui/*, or @<inner-ds>/* (including /design-tokens). Update the artifact and ask Beaver UI for the right component name.`,
-      );
+    // Beaver / inner-DS imports → destructure from window.Beaver(.tokens).
+    const isAllowed = ALLOWED_IMPORT_PREFIXES.some((prefix) =>
+      sourcePath.startsWith(prefix),
+    );
+    if (!isAllowed) {
+      // Not an import we know how to resolve. Pass it through; if the
+      // module truly is missing at runtime, eval will throw and the error
+      // routes to the parent. This is intentional — we don't reject in
+      // code, we let the runtime decide.
+      out.push(line);
+      continue;
     }
 
-    // The bundler exposes both components and tokens on `window.Beaver`,
-    // with tokens nested under `.tokens`. Choose which root to destructure
-    // from based on whether the import path ends with /design-tokens.
     const isTokens =
       sourcePath.endsWith(TOKENS_PACKAGE_SUFFIX) ||
       sourcePath.includes(`${TOKENS_PACKAGE_SUFFIX}/`);
@@ -207,7 +312,8 @@ export function rewriteBeaverImports(source: string): string {
 
     const destructurings = parseImportSpecifier(specifier);
     if (destructurings.length === 0) {
-      // `import 'foo';` side-effect-only — pointless for our domain, drop it.
+      // Side-effect-only import — drop, since the bundle already contains
+      // any side effects from initial UMD load.
       continue;
     }
     out.push(...destructurings.map((d) => renderDestructuring(d, lookupRoot)));
@@ -276,23 +382,10 @@ function renderDestructuring(d: Destructuring, lookupRoot: string): string {
   return `const { ${pairs} } = ${lookupRoot};`;
 }
 
-function errorPageHtml(title: string, message: string): string {
-  return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>${title}</title>
-    <style>
-      body { font: 13px/1.5 ui-monospace, monospace; padding: 24px; background: #fff1f2; color: #991b1b; }
-      pre { white-space: pre-wrap; }
-    </style>
-  </head>
-  <body>
-    <h2>Beaver preview rejected the artifact</h2>
-    <pre>${escapeHtml(message)}</pre>
-  </body>
-</html>`;
-}
+// errorPageHtml removed in v2 — the iframe no longer renders user-facing
+// error UI. All error states are routed through postMessage events to the
+// parent, which decides UX (typically: hide iframe, show "model is fixing"
+// indicator, send correction prompt, swap in new srcdoc on success).
 
 function escapeHtml(value: string): string {
   return value
