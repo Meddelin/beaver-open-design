@@ -317,7 +317,7 @@ function unwrapReactComponentGeneric(
         if (candidates.length === 1) return candidates[0];
         if (candidates.length > 1) {
           // intersection is meaningful — return as-is, the prop extractor
-          // will walk all member props via getApparentProperties.
+          // will walk all member props via getPropertiesOfType.
           return arg;
         }
       }
@@ -352,7 +352,11 @@ function extractPropsFromType(
   checker: ts.TypeChecker,
 ): PropSpec[] {
   const out: PropSpec[] = [];
-  const properties = checker.getApparentProperties(propsType);
+  // `getApparentProperties` was a `Type` method, not a `TypeChecker` method —
+  // mistake in v2 initial draft. `getPropertiesOfType` is the correct
+  // checker-level call; for the prop-extraction case (object types) the
+  // returned property set is what we want.
+  const properties = checker.getPropertiesOfType(propsType);
   for (const prop of properties) {
     const decl = prop.valueDeclaration ?? prop.declarations?.[0];
     if (!decl) continue;

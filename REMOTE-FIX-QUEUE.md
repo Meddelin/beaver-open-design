@@ -70,5 +70,82 @@ what the local agent tried that did not help.
 
 ## Entries
 
-_(none yet — local agent fills in as it works through the runbook in
-LOCAL-AGENT-HANDOFF.md)_
+### #1 — JSDOM bundle introspection returns empty `window.Beaver`
+
+**File:** `packages/beaver-spec-extractor/src/introspect-bundle.ts`
+**Symptom:** `pnpm beaver:sync` completes with `0 component specs`. JSDOM loads the UMD bundle, `window.Beaver = {}` is assigned but `Object.keys(window.Beaver).length === 0`.
+**Severity:** blocker (extractor produces nothing)
+**Workaround applied:** none — local agent reported and waited.
+**Notes for the remote:** bundle structure looked correct, manual test confirmed `window.Beaver.keys: []`. Local agent suspected (a) React stub incomplete, (b) JSDOM script execution context issue, or (c) missing globals like `ResizeObserver`.
+
+**Status: RESOLVED** in commit fixing this queue. Three changes:
+
+1. **Errors are no longer silently suppressed.** The previous code had
+   `virtualConsole.on('error', () => {})` and
+   `virtualConsole.on('jsdomError', () => {})` — which is the root cause
+   of the symptom. The bundle was throwing during init, the throw was
+   caught by JSDOM, and our code muted the error then reported "empty
+   bundle". Now errors are *collected* into an array and become part of
+   the thrown exception when `window.Beaver` ends up empty. The error
+   message tells the local agent which init step failed.
+
+2. **React/ReactDOM/jsx-runtime stubs expanded** to cover what React 18
+   actually ships and what DS components commonly call at module-init:
+   `cloneElement`, `isValidElement`, `Children`, `version`, `Suspense`,
+   `lazy`, `Profiler`, `StrictMode`, `useTransition`, `useDeferredValue`,
+   `useSyncExternalStore`, `useInsertionEffect`,
+   `__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED` (for libraries
+   that probe internals). `forwardRef`/`memo`/`lazy` now return objects
+   tagged with the right `$$typeof` symbols. `useState` initializes from
+   the function form. `useContext` returns `_currentValue`.
+
+3. **DOM polyfills installed on the JSDOM window before script run**:
+   `ResizeObserver`, `IntersectionObserver`, `matchMedia`,
+   `requestAnimationFrame`/`cancelAnimationFrame`, `queueMicrotask`,
+   `CSS.supports`, `process.env.NODE_ENV='production'`. These cover the
+   common eager-init paths we know DS components walk on first load.
+
+4. **Optional Playwright introspector** for cases JSDOM stubs still
+   can't satisfy. Activate via `--introspector playwright`. Loads the
+   bundle in real headless Chromium; same return shape so the rest of
+   the pipeline doesn't care which was used. Requires
+   `pnpm add -D -w playwright && pnpm exec playwright install chromium`
+   one-time, otherwise dynamic-import throws a clear "install
+   playwright" message.
+
+If the JSDOM path *still* returns empty after this — the thrown error
+will now include the actual exception(s) the bundle raised. Add a new
+queue entry with that text.
+
+---
+
+### #2 — TypeScript 5.6 API: `getApparentProperties` is a Type method, not a TypeChecker method
+
+**File:** `packages/beaver-spec-extractor/src/extract-tokens.ts:150` (and `extract-props.ts:355`)
+**Symptom:** `TypeError: checker.getApparentProperties is not a function`.
+**Severity:** blocker (token extraction crashes; props extraction crashes when reached)
+**Workaround applied:** local agent changed `extract-tokens.ts:150` to `getPropertiesOfType(type)`. Tagged inline.
+**Notes for the remote:** simple API mistake on remote's part — the method exists on `Type`, not on `TypeChecker`.
+
+**Status: RESOLVED** as permanent fix in two files (`extract-tokens.ts`
+and `extract-props.ts`, both call sites). The local agent's workaround
+in `extract-tokens.ts` is now landed as the canonical implementation —
+no TEMP-WORKAROUND tag needed anymore. The same fix applied to
+`extract-props.ts` where I made the identical mistake.
+
+`getPropertiesOfType` returns the declared properties; for our use case
+(walking object types to collect props/tokens) this is the right call.
+The `apparent` distinction matters when types have intersection
+modifications, but we're not relying on those resolutions.
+
+---
+
+### #3 — `@inner-ds` placeholder substitution
+
+**Files:** multiple — see Step 1.3 in LOCAL-AGENT-HANDOFF.md.
+**Symptom:** code references `@inner-ds` placeholder instead of the actual scope.
+**Severity:** non-issue — explicitly called out in handoff doc as mechanical substitution the local agent may perform without queue entry.
+**Resolution:** local agent did the substitution. Filed for tracking only.
+
+**Status: NO-ACTION** — this was always expected work and not a defect
+in remote-authored code.

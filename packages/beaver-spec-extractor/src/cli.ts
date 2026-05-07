@@ -17,6 +17,7 @@ interface CliArgs {
   out?: string;
   primaryScope?: string;
   innerScope?: string;
+  introspector?: 'jsdom' | 'playwright';
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -53,6 +54,14 @@ function parseArgs(argv: string[]): CliArgs {
         args.innerScope = next;
         i += 1;
         break;
+      case '--introspector':
+        if (next !== 'jsdom' && next !== 'playwright') {
+          console.error(`--introspector must be 'jsdom' or 'playwright', got: ${next}`);
+          process.exit(1);
+        }
+        args.introspector = next;
+        i += 1;
+        break;
       case '-h':
       case '--help':
         printHelp();
@@ -86,7 +95,16 @@ function printHelp(): void {
   --primary-scope  Scope considered the "primary" Beaver surface.
                    Default: @beaver-ui
   --inner-scope    Scope considered the "fallback" inner DS.
-                   Default: @inner-ds
+                   Default: @inner-ds (replace with your real scope)
+  --introspector   How to load the UMD bundle.
+                   'jsdom'      — in-process, ~200 ms, default. Uses a
+                                  React stub + DOM polyfills to support
+                                  components that init eagerly.
+                   'playwright' — opt-in, ~3 s, real Chromium. Use if
+                                  jsdom returns "Bundle is empty" errors
+                                  with no actionable JSDOM stack — that
+                                  usually means the bundle uses a DOM
+                                  feature JSDOM does not emulate.
 
 The bundle and node_modules options resolve relative to the current
 working directory if given as relative paths.
@@ -137,6 +155,7 @@ async function main(): Promise<void> {
     innerRoot: args.inner ? resolve(args.inner) : undefined,
     primaryScope: args.primaryScope,
     innerScope: args.innerScope,
+    introspector: args.introspector,
   });
 
   console.log(

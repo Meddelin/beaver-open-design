@@ -28,11 +28,25 @@ fails immediately.
 ## Phases
 
 1. **Bundle introspection (`introspect-bundle.ts`)** — load
-   `apps/beaver-runtime/dist/beaver.umd.js` in a JSDOM sandbox, enumerate
-   `Object.keys(window.Beaver)`, classify each export
+   `apps/beaver-runtime/dist/beaver.umd.js` in a sandboxed runtime
+   (JSDOM by default; Playwright opt-in via `--introspector playwright`),
+   enumerate `Object.keys(window.Beaver)`, classify each export
    (`component | hook | utility | tokens-namespace`), then resolve each
    name back to its source package by dynamically importing the
    runtime's `dependencies` and matching exports.
+
+   The JSDOM path provides a full React/ReactDOM/jsx-runtime stub plus
+   DOM polyfills (ResizeObserver, IntersectionObserver, matchMedia,
+   rAF, process.env) so a typical DS bundle's eager init code runs
+   without throwing. Errors during script execution are *collected* and
+   become part of the thrown exception when introspection fails — you
+   never get a silent "0 components" result without diagnostics.
+
+   Use `--introspector playwright` if the JSDOM path returns "Bundle
+   is empty" with no actionable stack — that usually means the bundle
+   uses a DOM API JSDOM doesn't emulate. Playwright requires
+   `pnpm add -D -w playwright && pnpm exec playwright install chromium`
+   one-time.
 2. **Prop extraction (`extract-props.ts`)** — for each (package, names[])
    pair, walk the package's published `dist/index.d.ts` via the
    TypeScript Compiler API. Captures name, type-as-text, required flag,

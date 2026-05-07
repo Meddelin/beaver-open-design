@@ -147,7 +147,11 @@ function walkObjectType(
 
   // Object types: descend into properties.
   if (type.flags & ts.TypeFlags.Object) {
-    const props = checker.getApparentProperties(type);
+    // See extract-props.ts for context — `getApparentProperties` is a `Type`
+    // method, not a `TypeChecker` method. The local agent caught this and
+    // applied a workaround (#2 in REMOTE-FIX-QUEUE.md); now landed as
+    // permanent fix.
+    const props = checker.getPropertiesOfType(type);
     if (props.length === 0) {
       // Empty object or unresolvable — fall back to type text.
       return [

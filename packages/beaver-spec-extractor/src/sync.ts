@@ -29,7 +29,7 @@
  */
 import { mkdir, writeFile, access, readFile } from 'node:fs/promises';
 import { join, dirname, posix, sep } from 'node:path';
-import { introspectBundle } from './introspect-bundle.js';
+import { introspectBundle, type IntrospectorKind } from './introspect-bundle.js';
 import { extractProps } from './extract-props.js';
 import { extractTokens } from './extract-tokens.js';
 import { extractDocs } from './extract-docs.js';
@@ -49,6 +49,8 @@ export interface SyncOptions extends ExtractorInputs {
   primaryScope?: string;
   /** Override the scope where inner-DS lives. */
   innerScope?: string;
+  /** Bundle introspector to use. Default 'jsdom'. */
+  introspector?: IntrospectorKind;
 }
 
 export interface SyncResult {
@@ -69,6 +71,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   const introspection = await introspectBundle({
     bundlePath: options.bundlePath,
     nodeModulesDir: options.nodeModulesDir,
+    introspector: options.introspector ?? 'jsdom',
     runtimePackageJson: join(
       options.repoRoot,
       'apps',
