@@ -73,6 +73,33 @@ if (argv[0] === 'mcp' && argv[1] === 'live-artifacts') {
   }
 }
 
+// `od beaver-mcp --skill-dir <path>` — stdio MCP server exposing the six
+// Beaver design-system tools to a coding agent. See
+// apps/daemon/src/mcp-beaver-tools-server.ts for the contract.
+if (argv[0] === 'beaver-mcp') {
+  const flag = (name) => {
+    const idx = argv.indexOf(`--${name}`);
+    return idx >= 0 ? argv[idx + 1] : undefined;
+  };
+  const skillDir = flag('skill-dir');
+  if (!skillDir) {
+    process.stderr.write(
+      '`od beaver-mcp` requires --skill-dir <abs-path-to-skills/beaver-prototype>\n',
+    );
+    process.exit(1);
+  }
+  try {
+    const { startBeaverToolsMcpServer } = await import('./mcp-beaver-tools-server.js');
+    await startBeaverToolsMcpServer({ skillDir });
+    // server.connect resolves on transport close; if it returns we exit.
+    process.exit(0);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
+    process.exit(1);
+  }
+}
+
 const first = argv.find((a) => !a.startsWith('-'));
 if (first && SUBCOMMAND_MAP[first]) {
   const idx = argv.indexOf(first);

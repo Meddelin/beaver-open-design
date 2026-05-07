@@ -4,6 +4,18 @@
   "private": true,
   "description": "CLI: introspect the prebuilt Beaver UI runtime bundle, walk published .d.ts via TS Compiler API, and emit a lean manifest + per-component specs + token groups + doc corpus consumed by the daemon's beaver-tools layer.",
   "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    }
+  },
   "bin": {
     "beaver-sync": "./dist/cli.js"
   },
