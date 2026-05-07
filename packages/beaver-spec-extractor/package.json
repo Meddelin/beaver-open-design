@@ -1,8 +1,8 @@
 {
   "name": "@beaver-open-design/spec-extractor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "CLI: scan local Beaver UI + inner-DS checkouts and emit skills/beaver-prototype/components.json plus per-component reference Markdown.",
+  "description": "CLI: introspect the prebuilt Beaver UI runtime bundle, walk published .d.ts via TS Compiler API, and emit a lean manifest + per-component specs + token groups + doc corpus consumed by the daemon's beaver-tools layer.",
   "type": "module",
   "bin": {
     "beaver-sync": "./dist/cli.js"
@@ -14,11 +14,12 @@
   },
   "dependencies": {
     "fast-glob": "^3.3.2",
-    "ts-morph": "^24.0.0"
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.3"
   },
   "devDependencies": {
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^20.17.10",
-    "tsx": "4.21.0",
-    "typescript": "^5.6.3"
+    "tsx": "4.21.0"
   }
 }
