@@ -91,8 +91,24 @@ if (argv[0] === 'beaver-mcp') {
   try {
     const { startBeaverToolsMcpServer } = await import('./mcp-beaver-tools-server.js');
     await startBeaverToolsMcpServer({ skillDir });
-    // server.connect resolves on transport close; if it returns we exit.
-    process.exit(0);
+    // `server.connect(transport)` resolves on stdin EOF (the standard MCP
+    // stdio convention). When invoked as a one-shot pipe (e.g.
+    // `echo '...' | od beaver-mcp ...`), stdin EOFs immediately after the
+    // request, the server processes the queued message, writes the
+    // response — and we MUST let stdout drain before the process exits,
+    // or the response is lost. The previous `process.exit(0)` here did
+    // that loss (see REMOTE-FIX-QUEUE.md #8).
+    //
+    // Two-belt fix:
+    //   1. Don't call process.exit(0) explicitly. Node's event loop
+    //      naturally exits after stdin closes and outstanding handles
+    //      drain — including the stdout pipe.
+    //   2. Belt-and-suspenders: end stdout cleanly so a finite exit code
+    //      ships even in environments where Node holds the loop open
+    //      (e.g. an open ResizeObserver in JSDOM-stubs we transitively
+    //      pulled in). The callback fires after all queued data has been
+    //      flushed to the underlying pipe.
+    process.stdout.end(() => process.exit(0));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);

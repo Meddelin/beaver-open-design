@@ -70,7 +70,7 @@ export interface BeaverSearchComponentsHit {
   package: string;
   tier: Tier;
   kind: string;
-  oneLineDescription?: string;
+  docSummary?: string;
   /** 0–1 relevance score; higher is better. */
   score: number;
 }
@@ -421,8 +421,8 @@ function entryToHit(
     package: entry.package,
     tier: entry.tier,
     kind: entry.kind,
-    ...(entry.oneLineDescription
-      ? { oneLineDescription: entry.oneLineDescription }
+    ...(entry.docSummary
+      ? { docSummary: entry.docSummary }
       : {}),
     score,
   };
@@ -458,7 +458,7 @@ function scoreEntry(entry: ManifestEntry, query: string): number {
   const kebab = name.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
   if (kebab.includes(q)) return 0.6;
 
-  const desc = (entry.oneLineDescription ?? '').toLowerCase();
+  const desc = (entry.docSummary ?? '').toLowerCase();
   if (desc) {
     const terms = q.split(/\s+/).filter(Boolean);
     const present = terms.filter((t) => desc.includes(t));

@@ -72,7 +72,7 @@ export interface ManifestEntry {
   /** "primary" for @beaver-ui/*, "fallback" for inner-DS. */
   tier?: 'primary' | 'fallback';
   /** Optional one-line description; if present, may be shown in the index. */
-  oneLineDescription?: string;
+  docSummary?: string;
 }
 
 export interface ComposeInput {
@@ -210,7 +210,7 @@ function renderToolsManifesto(): string {
 
 You have these tools for design-system context. Use them — do not work from prompt content alone.
 
-- \`beaver_search_components(query, limit?)\` — fuzzy search across names and descriptions. Beaver components rank above inner-DS at equal relevance. Returns \`{ name, package, tier, kind, oneLineDescription }[]\`.
+- \`beaver_search_components(query, limit?)\` — fuzzy search across names and descriptions. Beaver components rank above inner-DS at equal relevance. Returns \`{ name, package, tier, kind, docSummary }[]\`.
 - \`beaver_get_component_spec(name)\` — full spec for one component: props (types, required, defaults, enum values), examples, referencedTypes (cross-package).
 - \`beaver_list_token_groups()\` — short list of token groups (color, spacing, typography, animation, …) with sample keys.
 - \`beaver_get_tokens(group)\` — flat \`{ path: value }\` for a token group.
@@ -234,11 +234,11 @@ function parseManifest(raw: string | undefined): ManifestEntry[] {
       const name = (item as { name?: unknown }).name;
       const pkg = (item as { package?: unknown }).package;
       const tierRaw = (item as { tier?: unknown }).tier;
-      const desc = (item as { oneLineDescription?: unknown }).oneLineDescription;
+      const desc = (item as { docSummary?: unknown }).docSummary;
       if (typeof name !== 'string' || typeof pkg !== 'string') continue;
       const entry: ManifestEntry = { name, package: pkg };
       if (tierRaw === 'primary' || tierRaw === 'fallback') entry.tier = tierRaw;
-      if (typeof desc === 'string') entry.oneLineDescription = desc;
+      if (typeof desc === 'string') entry.docSummary = desc;
       out.push(entry);
     }
     return out;

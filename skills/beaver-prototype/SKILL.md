@@ -96,7 +96,7 @@ variant, transition durations, etc.):
 
 - `beaver_list_token_groups()` — see what groups exist.
 - `beaver_get_tokens(group)` — fetch the actual values.
-- Use these via `import { spacing, color } from '@inner-ds/design-tokens'`
+- Use these via `import { spacing, color } from '@tui-react/design-tokens'`
   (or sub-paths like `/colors`).
 
 If the visual decision could be implemented either via a token or via

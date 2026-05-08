@@ -61,12 +61,12 @@ const BEAVER_STYLESHEET_URL_DEFAULT = '/vendor/beaver.css';
  * here; they pass through to runtime where they fail with "is not defined".
  * That failure routes through the auto-correction loop.
  *
- * Inner-DS scope: replace `@inner-ds/` with the actual scope after
+ * Inner-DS scope: if your inner-DS scope is NOT `@tui-react`, swap it
  * `pnpm install` resolves the Beaver dep graph. See AGENTS.md / README.
  */
 const ALLOWED_IMPORT_PREFIXES = [
   '@beaver-ui/',
-  '@inner-ds/',
+  '@tui-react/',
 ] as const;
 
 const TOKENS_PACKAGE_SUFFIX = '/design-tokens';
@@ -362,7 +362,7 @@ function parseImportSpecifier(specifier: string): Destructuring[] {
 
 function renderDestructuring(d: Destructuring, lookupRoot: string): string {
   if (d.kind === 'namespace') {
-    // `import * as colors from '@inner-ds/design-tokens/colors'` → `const colors = window.Beaver.tokens.colors;`
+    // `import * as colors from '@tui-react/design-tokens/colors'` → `const colors = window.Beaver.tokens.colors;`
     // We can't preserve the sub-path here without parsing it, so the namespace import
     // simply binds to the whole tokens / Beaver root. Authors who need a slice should
     // use a named import instead.

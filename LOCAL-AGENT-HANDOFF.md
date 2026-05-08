@@ -6,7 +6,7 @@ structural changes; this document tells you how to bring them online,
 what to verify, what to do when the remote-authored code misbehaves,
 and what work remains for you to author yourself.
 
-Remote's three v2 commits:
+Remote's v2 commit chain:
 
 1. `49ddc54` — prompt stack (discovery + designer-base + skill + lean
    component index + tools manifesto), iframe runtime errors via
@@ -16,6 +16,29 @@ Remote's three v2 commits:
 3. `7b83bb3` — `beaver-tools` (six DS tools as protocol-neutral
    functions) + `mcp-beaver-tools-server` (MCP transport) + `od
    beaver-mcp` CLI entry + this handoff doc.
+4. `c918a89` — REMOTE-FIX-QUEUE #1 + #2 (JSDOM diagnostics, TS Compiler
+   API method-vs-checker mistake).
+5. **(latest)** — REMOTE-FIX-QUEUE #4–#8: empty props extraction, token
+   "any" values, low component count, missing docSummary, MCP server
+   no-response. See `REMOTE-FIX-QUEUE.md` for per-fix root-cause
+   analyses.
+
+Two key behavior changes from the local agent's first run:
+
+- **Field rename: `description` / `oneLineDescription` → `docSummary`.**
+  Both `ComponentSpec` and `ManifestEntry` now use `docSummary`. The
+  local agent had been querying `.docSummary` and getting null because
+  the field was called `description`. Same name everywhere now.
+
+- **Inner-DS scope is `@tui-react`.** Substituted across
+  `apps/beaver-runtime/{src/index.ts, package.json}`,
+  `apps/web/src/runtime/beaver-component.ts`,
+  `packages/beaver-spec-extractor/src/{cli.ts, sync.ts, extract-tokens.ts}`,
+  and `skills/beaver-prototype/SKILL.md`. The previous `@inner-ds`
+  placeholder is gone. If you need a different scope, do a global
+  search-and-replace for `@tui-react` (note: do NOT replace
+  occurrences in REMOTE-FIX-QUEUE.md — those are historical log
+  entries).
 
 ---
 
@@ -96,48 +119,51 @@ continuing.
 
 ### Step 1.2 — Inner-DS scope discovery
 
-The remote wrote with `@inner-ds` as a placeholder. Find the real scope:
+> **v2.1 update:** the inner-DS scope is now hardcoded as `@tui-react`
+> across all code/skill/prompt files based on the local agent's first
+> sync (queue entry #3). If your fork uses a different scope name,
+> follow Step 1.3 substitution. If it really is `@tui-react` — Step 1.3
+> is a no-op, skip it.
 
 ```bash
 cat node_modules/@beaver-ui/components/package.json | jq '.dependencies, .peerDependencies'
 ```
 
-Look for the corp-internal scope (anything `@xxx/yyy` that isn't
-`@beaver-ui` and isn't `react`). Note the scope name.
+**Verify:** the scope you see matches what's already wired in. If it's
+different — proceed to Step 1.3 to substitute. If matches `@tui-react`
+— skip 1.3.
 
-**Verify:** the scope appears, and at least one package under it is
-`*tokens*` or named `design-tokens`. If you can't find it — that's a
-configuration question for whoever maintains Beaver internally; not a
-fork issue. Halt.
+### Step 1.3 — Substitute the inner-DS scope (only if NOT `@tui-react`)
 
-### Step 1.3 — Substitute the inner-DS scope across the fork
-
-The placeholder `@inner-ds` appears in:
+Code and prompts assume `@tui-react`. If your fork's inner-DS scope
+differs, do a global substitution across these locations:
 
 - `apps/beaver-runtime/src/index.ts` — runtime UMD re-exports.
 - `apps/beaver-runtime/package.json` — dependencies.
-- `apps/web/src/runtime/beaver-component.ts` — `ALLOWED_IMPORT_PREFIXES`
-  constant.
-- `apps/daemon/src/prompts/beaver-system.ts` — Rule 3 in the prompt
-  body (mentions `@<inner-ds>/`).
+- `apps/web/src/runtime/beaver-component.ts` — `ALLOWED_IMPORT_PREFIXES`.
+- `apps/daemon/src/prompts/beaver-system.ts` — system prompt body.
+- `packages/beaver-spec-extractor/src/sync.ts` — `DEFAULT_INNER_SCOPE`.
+- `packages/beaver-spec-extractor/src/extract-tokens.ts` — JSDoc.
+- `packages/beaver-spec-extractor/src/cli.ts` — help text default.
 - `skills/beaver-prototype/SKILL.md` — example imports.
+- `skills/beaver-prototype/assets/template.tsx` — seed imports.
+- `design-systems/beaver/DESIGN.md` — descriptive text.
+- `apps/beaver-runtime/README.md`, `README.md` — instruction text.
 
-You need to replace `@inner-ds` with the real scope. **This is one of
-the few times you may edit remote-authored code without a queue
-entry**, because the placeholder is intentional and the substitution is
-mechanical. Use:
+Mechanical substitution:
 
 ```bash
-# Inspect first:
-grep -rn '@inner-ds' apps/ packages/ skills/
-
-# Substitute (adjust scope name):
-grep -rl '@inner-ds' apps/ packages/ skills/ \
-  | xargs sed -i 's|@inner-ds|@actual-scope|g'
+grep -rl '@tui-react' apps/ packages/ skills/ design-systems/ README.md apps/beaver-runtime/README.md \
+  | xargs sed -i 's|@tui-react|@your-actual-scope|g'
 ```
 
-**Verify:** `grep -rn '@inner-ds' apps/ packages/ skills/` returns no
-hits.
+**Do NOT touch** `LOCAL-AGENT-HANDOFF.md` or `REMOTE-FIX-QUEUE.md` —
+those contain historical references and instructions about the
+placeholder concept; rewriting them confuses future readers.
+
+**Verify:** `grep -rn '@tui-react' apps/ packages/ skills/` returns
+zero hits, and `grep -rn '@your-actual-scope' apps/ packages/ skills/`
+returns hits in the locations listed above.
 
 ### Step 1.4 — Build the runtime UMD
 
@@ -203,21 +229,41 @@ Expected ranges (rough):
 - `tokenGroups`: 4–8 (color, spacing, typography, animation, …).
 - `specs/<Name>.json` count: equal to components total.
 
-**Common rough edges** (file all of these as queue entries — don't
-attempt fixes):
+**v2.1 — what should be different from your last run:**
+
+- Component count should be 800-1500 (was 112). Inner-DS components
+  now reach `window.Beaver` because `apps/beaver-runtime/src/index.ts`
+  has the `export * from '@tui-react/components'` line uncommented.
+- Per-spec `props` should be non-empty for the majority of components.
+  TS Compiler API now sees `react/index.d.ts` (added as a rootName);
+  on remaining failures, an AST fallback walks the `.d.ts` directly.
+- Token entries should have real values (`#xxxxxx`, numbers, etc.),
+  not `"any"`. Token extraction now uses dynamic `import()` of the
+  JS module — actual runtime values, not the erased `.d.ts` type.
+- Spec/manifest field is `docSummary`, not `description` or
+  `oneLineDescription`. Update your `jq` queries accordingly.
+
+**Common rough edges if any of the above don't pan out** (file as
+queue entries — don't attempt fixes):
 
 - `pnpm beaver:sync done — 0 component specs, 0 token groups, 0 doc files`
-  — usually JSDOM throws while loading the bundle. The error will be
-  in stderr above the success line. Capture verbatim.
-- Manifest count substantially smaller than `Object.keys(window.Beaver)`
-  — the `name → package` resolver missed sub-packages. Capture which
-  names landed in `@unknown` package.
-- All specs have empty `props: []` — the TS Compiler API didn't
-  resolve types. Capture the type representation in one of the
-  `.d.ts` files for an offending component.
-- Token group `.json` files contain entries like
-  `"value": "<some weird type string>"` instead of actual values —
-  walker bottomed out at unresolved type. Capture the type text.
+  — JSDOM threw while loading the bundle. The error is now collected
+  and printed in the thrown exception (REMOTE-FIX-QUEUE.md #1 fix).
+  Capture verbatim. As a quick alternative try
+  `pnpm beaver:sync -- --introspector playwright` after installing
+  `playwright` and running `playwright install chromium`.
+- A subset of specs still has empty `props: []` — the AST fallback
+  also failed for those shapes. Run with
+  `--debug-component <Name>` to see per-step diagnostics for one of
+  the offending components and file the diagnostics.
+- Token entries STILL contain `"value": "any"` for some entries — the
+  fallback TS Compiler API path was used because dynamic `import()`
+  failed. The error message in `errors[]` will say which package
+  failed to import.
+- Component count grew but still substantially below
+  `Object.keys(window.Beaver)` count — the `name → package` resolver
+  didn't find some sub-packages in node_modules. Capture which names
+  landed in `@unknown`.
 
 ### Step 1.6 — Add docs corpus (requires source checkouts)
 
@@ -483,7 +529,7 @@ Skeleton:
 
 - Read the manifest.
 - For each component with `kind: 'unknown'`, prepare a small payload:
-  `{ name, package, oneLineDescription, propNames }`.
+  `{ name, package, docSummary, propNames }`.
 - Call qwen-code through a minimal wrapper, asking for one of:
   `layout | input | feedback | overlay | data-display | navigation
   | typography | media | utility | unknown`.
@@ -505,19 +551,26 @@ Run through this entire list in order. Tick boxes as you go.
 
 - [ ] `pnpm install` succeeds; `@beaver-ui/components` is a real
       version (not `0.0.0-stub`).
-- [ ] Inner-DS scope discovered and substituted across the fork; no
-      `@inner-ds` placeholders remain.
+- [ ] Inner-DS scope verified. If `@tui-react`, no substitution
+      needed (already wired in v2.1). If different — Step 1.3
+      substitution done; `grep -rn '@tui-react' apps/ packages/
+      skills/` returns 0.
 - [ ] `pnpm beaver:build-runtime` produces `beaver.umd.js` (>1 MB) and
       `beaver.css`, both copied to `apps/web/public/vendor/`.
 
-### Spec extractor gates
+### Spec extractor gates (post v2.1)
 
 - [ ] `pnpm beaver:sync` finishes without errors.
-- [ ] `components.json` has hundreds of components, both `primary` and
+- [ ] `components.json` has 800–1500 components, both `primary` and
       `fallback` tiers.
-- [ ] At least 50% of components have non-empty `props` arrays in their
-      per-component spec files.
-- [ ] At least one token group `.json` has non-empty `entries`.
+- [ ] **At least 60% of components have non-empty `props` arrays in
+      their per-component spec files.** Run:
+      `find skills/beaver-prototype/specs -name '*.json' -exec jq '.props | length' {} \; | awk '$1>0' | wc -l`
+- [ ] **No token entry has `"value": "any"`.** Run:
+      `jq '[.entries[] | select(.value == "any")] | length' skills/beaver-prototype/tokens/*.json | jq -s 'add'` → 0
+- [ ] At least one component has non-null `docSummary` in either spec
+      or manifest. With source checkouts (`--beaver`/`--inner`),
+      coverage should be ≥ 50%.
 
 ### Daemon gates
 

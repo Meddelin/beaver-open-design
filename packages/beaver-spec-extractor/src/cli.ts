@@ -18,6 +18,7 @@ interface CliArgs {
   primaryScope?: string;
   innerScope?: string;
   introspector?: 'jsdom' | 'playwright';
+  debugComponent?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -62,6 +63,10 @@ function parseArgs(argv: string[]): CliArgs {
         args.introspector = next;
         i += 1;
         break;
+      case '--debug-component':
+        args.debugComponent = next;
+        i += 1;
+        break;
       case '-h':
       case '--help':
         printHelp();
@@ -95,7 +100,7 @@ function printHelp(): void {
   --primary-scope  Scope considered the "primary" Beaver surface.
                    Default: @beaver-ui
   --inner-scope    Scope considered the "fallback" inner DS.
-                   Default: @inner-ds (replace with your real scope)
+                   Default: @tui-react (override with --inner-scope if your fork uses a different scope)
   --introspector   How to load the UMD bundle.
                    'jsdom'      — in-process, ~200 ms, default. Uses a
                                   React stub + DOM polyfills to support
@@ -105,6 +110,13 @@ function printHelp(): void {
                                   with no actionable JSDOM stack — that
                                   usually means the bundle uses a DOM
                                   feature JSDOM does not emulate.
+  --debug-component <Name>
+                   When extracting props, log diagnostic info to stderr
+                   for the named component: type after each unwrap step,
+                   call signature count, apparent-type-args count,
+                   whether AST fallback was triggered. Use when most
+                   specs come back empty and you need to know why for
+                   one specific component.
 
 The bundle and node_modules options resolve relative to the current
 working directory if given as relative paths.
@@ -156,6 +168,7 @@ async function main(): Promise<void> {
     primaryScope: args.primaryScope,
     innerScope: args.innerScope,
     introspector: args.introspector,
+    debugComponent: args.debugComponent,
   });
 
   console.log(

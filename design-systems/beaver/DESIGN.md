@@ -3,7 +3,7 @@ id: beaver
 title: Beaver UI
 summary: |
   The corporate Beaver UI design system. Tokens flow in from the inner DS
-  Beaver consumes (`@<inner-ds>/design-tokens`); components flow in from
+  Beaver consumes (`@tui-react/design-tokens`); components flow in from
   `@beaver-ui/*` packages installed from a private npm registry.
 ---
 

@@ -22,14 +22,14 @@ prototype is visually and behaviourally identical to production code.
 The behavioural rules pinned into the system prompt
 ([`apps/daemon/src/prompts/beaver-system.ts`](apps/daemon/src/prompts/beaver-system.ts)):
 
-1. Imports come **only** from `@beaver-ui/*`, `@<inner-ds>/components`,
-   `@<inner-ds>/design-tokens`, or `react`.
+1. Imports come **only** from `@beaver-ui/*`, `@tui-react/components`,
+   `@tui-react/design-tokens`, or `react`.
 2. Components / props / variants come **only** from the synced manifest
    ([`skills/beaver-prototype/components.json`](skills/beaver-prototype/components.json)).
 3. **Fallback ladder**: Beaver → Beaver primitives composition → inner-DS
    primitive → STOP and ask the user. No silent invention.
 4. **Style overrides**: only via tokens imported from
-   `@<inner-ds>/design-tokens`. No hardcoded hex / px / font names.
+   `@tui-react/design-tokens`. No hardcoded hex / px / font names.
 
 ## Setup
 
@@ -59,7 +59,7 @@ pnpm install
 After install, edit two files to point at your inner DS scope:
 
 - [`apps/beaver-runtime/package.json`](apps/beaver-runtime/package.json) —
-  add `@<inner-ds>/components` and `@<inner-ds>/design-tokens` to
+  add `@tui-react/components` and `@tui-react/design-tokens` to
   `dependencies`.
 - [`apps/beaver-runtime/src/index.ts`](apps/beaver-runtime/src/index.ts) —
   uncomment the inner-DS export block, replacing `<inner-ds>` with the

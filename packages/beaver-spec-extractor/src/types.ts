@@ -46,8 +46,14 @@ export interface ManifestEntry {
   specPath: string;
   /** Optional path under skills/beaver-prototype/ to the doc file. */
   docPath?: string;
-  /** Optional one-liner extracted from JSDoc / Storybook description. */
-  oneLineDescription?: string;
+  /**
+   * Optional short description extracted from JSDoc summary on the .d.ts
+   * declaration, or first-paragraph of the per-component MDX/README when a
+   * source checkout is provided. Same field name used in `ComponentSpec`
+   * so consumers (manifest readers, search ranking, tool output) don't
+   * need to special-case manifest-vs-spec.
+   */
+  docSummary?: string;
 }
 
 /**
@@ -103,7 +109,17 @@ export interface ComponentSpec {
   package: string;
   tier: Tier;
   importStatement: string;
-  description?: string;
+  /**
+   * Short description for the component. Extracted in priority order:
+   *   1. JSDoc summary on the published .d.ts declaration.
+   *   2. First paragraph of the matching docs corpus (MDX / README) when
+   *      a source checkout was passed via `--beaver` / `--inner`.
+   *
+   * Renamed from the v2-initial `description` field — the local agent
+   * was reading `.docSummary` and getting null because of the
+   * mismatch. Same name now in both `ManifestEntry` and `ComponentSpec`.
+   */
+  docSummary?: string;
   props: PropSpec[];
   examples: ExampleSnippet[];
   /**

@@ -104,7 +104,40 @@ export async function introspectBundle(
     options,
   );
 
+  // Sanity warning: if the bundle's component count looks suspiciously
+  // low compared to the number of dependencies the runtime declares,
+  // print a hint to stderr. Most likely cause is that
+  // `apps/beaver-runtime/src/index.ts` is missing inner-DS re-exports
+  // (placeholder commented out from initial scaffold) — see
+  // REMOTE-FIX-QUEUE.md #6.
+  const componentCount = exports.filter(
+    (e) => e.classification === 'component',
+  ).length;
+  if (componentCount > 0 && componentCount < 200) {
+    const depCount = await countRuntimeDeps(options).catch(() => 0);
+    if (depCount >= 20) {
+      process.stderr.write(
+        `[introspect-bundle] warning: ${componentCount} components found, ` +
+          `but the runtime has ${depCount} declared deps. The bundle may be ` +
+          `missing inner-DS re-exports. Check apps/beaver-runtime/src/index.ts — ` +
+          `it should have \`export * from '<inner-scope>/components'\` (or ` +
+          `equivalent per-package re-exports) for the inner DS.\n`,
+      );
+    }
+  }
+
   return { exports, tokenGroups, packageOf };
+}
+
+async function countRuntimeDeps(
+  options: IntrospectBundleOptions,
+): Promise<number> {
+  if (options.runtimeDeps) return options.runtimeDeps.length;
+  if (!options.runtimePackageJson) return 0;
+  const content = await readFile(options.runtimePackageJson, 'utf8');
+  const parsed = JSON.parse(content) as { dependencies?: Record<string, string> };
+  return Object.keys(parsed.dependencies ?? {}).filter((n) => n.startsWith('@'))
+    .length;
 }
 
 /** Internal: shared output shape between introspector implementations. */

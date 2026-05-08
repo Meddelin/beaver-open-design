@@ -51,11 +51,18 @@ fails immediately.
    pair, walk the package's published `dist/index.d.ts` via the
    TypeScript Compiler API. Captures name, type-as-text, required flag,
    default expression, JSDoc summary, string-literal-union enum values,
-   and cross-package referenced types.
-3. **Token extraction (`extract-tokens.ts`)** — find the inner-DS
-   design-tokens package, walk each top-level export's type via TS API,
-   produce flat `{ path, value }` entries. Frozen objects are followed
-   into their leaves.
+   and cross-package referenced types. The TS program is created with
+   React's `.d.ts` as an additional rootName so type names like
+   `ForwardRefExoticComponent`/`FC` resolve. AST-based fallback walks
+   the .d.ts directly when checker resolution still fails. Use
+   `--debug-component <Name>` to see per-step diagnostics for one
+   component.
+3. **Token extraction (`extract-tokens.ts`)** — primary path:
+   dynamic `import()` of the design-tokens JS module → `Object.entries`
+   walk → flat `{ path, value }` entries. This works regardless of how
+   the publisher's .d.ts looks (even `export const designTokens: any`
+   produces real values). Fallback path: TS Compiler API on the .d.ts
+   when dynamic import fails (rare).
 4. **Docs extraction (`extract-docs.ts`)** — scan local source checkouts
    (`--beaver` and/or `--inner`) for MDX, top-level JSDoc on exported
    declarations, and package-root READMEs. Produces one Markdown file

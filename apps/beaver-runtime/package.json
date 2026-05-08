@@ -2,7 +2,7 @@
   "name": "@beaver-open-design/beaver-runtime",
   "version": "0.1.0",
   "private": true,
-  "description": "Vite library that bundles @beaver-ui/* + @<inner-ds>/* + design tokens into a single UMD that the iframe preview loads. Exposes window.Beaver = { ...components, tokens }.",
+  "description": "Vite library that bundles @beaver-ui/* + @tui-react/* + design tokens into a single UMD that the iframe preview loads. Exposes window.Beaver = { ...components, tokens }.",
   "type": "module",
   "scripts": {
     "build": "vite build && node ./scripts/copy-to-web.mjs",
@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@beaver-ui/components": "*",
+    "@tui-react/components": "*",
+    "@tui-react/design-tokens": "*",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },

@@ -2,35 +2,41 @@
  * extract-tokens.ts — phase 3 of beaver:sync.
  *
  * Tokens live exclusively in the inner-DS. Beaver consumes them but does
- * not re-publish them. The pattern in inner-DS is `packages/design-tokens`
- * with sub-modules per group (`color.ts`, `spacing.ts`, `animation.ts`,
- * etc.), each of which exports frozen objects produced by something like
- * `Object.freeze({ ... })` or a wrapper helper.
+ * not re-publish them.
  *
- * The previous (v1) extractor parsed these regex-style and bailed on
- * frozen objects. This v2 implementation uses TS Compiler API to:
+ * v2.1 strategy: dynamic `import()` of the actual JS module → walk
+ * runtime objects via `Object.entries`. This is robust to whatever the
+ * publisher's .d.ts looks like:
+ *   - `export const designTokens: any` → can't see values via TS API,
+ *     but at runtime it's a real object with real values.
+ *   - `Object.freeze({...})` → looks like a plain object at runtime.
+ *   - `as const` literal types → also real objects at runtime.
  *
- *   1. Find the design-tokens package in node_modules.
- *   2. For each top-level exported const, resolve the type / value via
- *      checker.getTypeOfSymbolAtLocation.
- *   3. Walk the resolved object type, collecting `path → value` entries.
- *   4. Group entries by top-level export name (e.g. `color.brand.primary`
- *      goes under group `color`).
+ * The previous v2 implementation was TS-Compiler-API-only and bottomed
+ * out at `typeToString(any) === "any"`, producing useless tokens — see
+ * REMOTE-FIX-QUEUE.md #5.
  *
- * The result is one JSON file per group, plus a top-level `index.json`
- * listing all groups. Models fetch the per-group file via
- * `beaver_get_tokens(group)`.
+ * TS Compiler API is kept as a fallback for environments where dynamic
+ * import fails (rare: package without `main`, ESM/CJS interop issues,
+ * native add-ons). When it kicks in, we get *structure* (object key
+ * paths) without values, which is still better than nothing — the model
+ * can ask the user.
+ *
+ * Output: one JSON file per top-level export of the tokens package,
+ * plus a top-level `index.json` listing groups. Models fetch the
+ * per-group file via `beaver_get_tokens(group)`.
  */
 import ts from 'typescript';
 import { join } from 'node:path';
 import { readFile, access, readdir } from 'node:fs/promises';
-import type { TokenEntry, TokenGroup } from './types.js';
+import { pathToFileURL } from 'node:url';
+import type { TokenEntry, TokenGroup, TokenObject } from './types.js';
 
 export interface ExtractTokensOptions {
   /** node_modules directory. */
   nodeModulesDir: string;
   /**
-   * Inner-DS scope (e.g. '@inner-ds'). The function looks for
+   * Inner-DS scope (e.g. '@tui-react'). The function looks for
    * `<nodeModulesDir>/<scope>/design-tokens` first, then any package
    * inside the scope whose name ends with `design-tokens`.
    */
@@ -59,6 +65,16 @@ export async function extractTokens(
     return { groups: [], errors };
   }
 
+  // ─── Primary path: dynamic import of the JS module ─────────────────────
+  const runtimeResult = await extractTokensViaRuntime(tokensPkg);
+  if (runtimeResult.ok) {
+    return { groups: runtimeResult.groups, errors };
+  }
+  errors.push(
+    `Dynamic import of ${tokensPkg.name} failed (${runtimeResult.reason}); falling back to TS Compiler API. Token values may be unresolved (typeof "any").`,
+  );
+
+  // ─── Fallback: TS Compiler API on the .d.ts ────────────────────────────
   const dtsPath = await findDtsForPackage(tokensPkg.dir);
   if (!dtsPath) {
     errors.push(`No .d.ts found in ${tokensPkg.dir}.`);
@@ -88,10 +104,10 @@ export async function extractTokens(
     errors.push(`No file symbol for ${dtsPath}.`);
     return { groups: [], errors };
   }
-  const exports = checker.getExportsOfModule(fileSymbol);
+  const symExports = checker.getExportsOfModule(fileSymbol);
 
   const groups: TokenGroup[] = [];
-  for (const sym of exports) {
+  for (const sym of symExports) {
     const decl = sym.declarations?.[0];
     if (!decl) continue;
     const type = checker.getTypeOfSymbolAtLocation(sym, decl);
@@ -106,6 +122,212 @@ export async function extractTokens(
   }
 
   return { groups, errors };
+}
+
+interface RuntimeExtractionOk {
+  ok: true;
+  groups: TokenGroup[];
+}
+
+interface RuntimeExtractionFail {
+  ok: false;
+  reason: string;
+}
+
+/**
+ * Load the tokens module via Node's dynamic `import()` and walk the
+ * runtime objects to produce token groups. This is the source of truth
+ * for actual token values — the .d.ts may have erased them to type
+ * aliases, but the JS file always has the literals.
+ *
+ * We try the module's package name first (e.g. `@inner/design-tokens`),
+ * which lets Node honour the package's `exports` map and condition.
+ * If that fails (some environments don't expose workspace deps to
+ * dynamic imports), we fall back to a direct file URL.
+ */
+async function extractTokensViaRuntime(
+  tokensPkg: FoundTokensPackage,
+): Promise<RuntimeExtractionOk | RuntimeExtractionFail> {
+  let mod: Record<string, unknown> | null = null;
+
+  // Try package-name import first.
+  try {
+    mod = (await import(tokensPkg.name)) as Record<string, unknown>;
+  } catch {
+    // fall through to file-URL fallback
+  }
+
+  // Try direct file import if package-name didn't work.
+  if (!mod) {
+    try {
+      const entry = await findRuntimeEntryFile(tokensPkg.dir);
+      if (entry) {
+        mod = (await import(pathToFileURL(entry).href)) as Record<string, unknown>;
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        reason: `dynamic import error: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  if (!mod) {
+    return {
+      ok: false,
+      reason: 'could not locate a JS entry to import',
+    };
+  }
+
+  // Skip the ESM `default` re-export when present; iterate the rest as
+  // top-level groups.
+  const groups: TokenGroup[] = [];
+  for (const [groupName, value] of Object.entries(mod)) {
+    if (groupName === 'default') continue;
+    if (value === null || typeof value !== 'object') continue;
+    const entries = walkRuntimeObject(value as Record<string, unknown>, groupName, 0);
+    if (entries.length === 0) continue;
+    groups.push({
+      group: groupName,
+      importPath: `${tokensPkg.name}/${groupName}`,
+      description: undefined,
+      entries,
+    });
+  }
+
+  if (groups.length === 0) {
+    return {
+      ok: false,
+      reason:
+        'module imported successfully but no enumerable object exports found at top level',
+    };
+  }
+  return { ok: true, groups };
+}
+
+/**
+ * Recursively walk a runtime JS object, collecting `path → value`
+ * entries. Stops at primitives. Cycles are rare in token files but we
+ * cap depth defensively.
+ */
+function walkRuntimeObject(
+  obj: Record<string, unknown>,
+  basePath: string,
+  depth: number,
+): TokenEntry[] {
+  if (depth > 10) return [];
+  const out: TokenEntry[] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    const path = `${basePath}.${key}`;
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      out.push({ path, value });
+    } else if (value === null || value === undefined) {
+      out.push({ path, value: null });
+    } else if (typeof value === 'object') {
+      // Capture the whole nested object as a TokenObject leaf if it's
+      // shallow enough to be useful, else recurse.
+      const child = value as Record<string, unknown>;
+      const childKeys = Object.keys(child);
+      if (childKeys.length === 0) {
+        out.push({ path, value: null });
+      } else {
+        // Distinguish between "leaf object" (e.g. `{ value: '#fff', meta: ... }`
+        // tokens have small leaf shape) and "container" (deep nested
+        // groups). Heuristic: if all child values are primitives and
+        // there are ≤ 4 keys, treat as leaf.
+        const allPrimitive = childKeys.every((k) => {
+          const v = child[k];
+          return v === null || typeof v !== 'object';
+        });
+        if (allPrimitive && childKeys.length <= 4) {
+          const flat: TokenObject = {};
+          for (const k of childKeys) {
+            const v = child[k];
+            if (
+              typeof v === 'string' ||
+              typeof v === 'number' ||
+              typeof v === 'boolean' ||
+              v === null
+            ) {
+              flat[k] = v;
+            } else {
+              flat[k] = null;
+            }
+          }
+          out.push({ path, value: flat });
+        } else {
+          out.push(...walkRuntimeObject(child, path, depth + 1));
+        }
+      }
+    }
+    // Functions, symbols, etc. — skip silently.
+  }
+  return out;
+}
+
+async function findRuntimeEntryFile(
+  pkgDir: string,
+): Promise<string | null> {
+  // Read package.json for `main`/`module`/`exports` clues, otherwise
+  // probe common build outputs.
+  try {
+    const pjRaw = await readFile(join(pkgDir, 'package.json'), 'utf8');
+    const pj = JSON.parse(pjRaw) as {
+      main?: string;
+      module?: string;
+      exports?: unknown;
+    };
+    const candidates = [pj.module, pj.main].filter(
+      (x): x is string => typeof x === 'string',
+    );
+    // Light parse of `exports`: if it's a string, use it; if an object
+    // with a "." entry that's a string, use that.
+    if (typeof pj.exports === 'string') {
+      candidates.unshift(pj.exports);
+    } else if (pj.exports && typeof pj.exports === 'object') {
+      const dotEntry = (pj.exports as Record<string, unknown>)['.'];
+      if (typeof dotEntry === 'string') candidates.unshift(dotEntry);
+      else if (dotEntry && typeof dotEntry === 'object') {
+        const importEntry =
+          (dotEntry as Record<string, unknown>).import ??
+          (dotEntry as Record<string, unknown>).default;
+        if (typeof importEntry === 'string') candidates.unshift(importEntry);
+      }
+    }
+    for (const rel of candidates) {
+      const file = join(pkgDir, rel);
+      try {
+        await access(file);
+        return file;
+      } catch {
+        // try next
+      }
+    }
+  } catch {
+    // pass
+  }
+
+  // Last-ditch probes.
+  for (const rel of [
+    'dist/index.mjs',
+    'dist/index.js',
+    'lib/index.js',
+    'index.mjs',
+    'index.js',
+  ]) {
+    const file = join(pkgDir, rel);
+    try {
+      await access(file);
+      return file;
+    } catch {
+      // next
+    }
+  }
+  return null;
 }
 
 /**

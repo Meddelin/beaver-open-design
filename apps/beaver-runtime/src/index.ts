@@ -5,7 +5,7 @@
 // imports like:
 //
 //   import { Button, Drawer } from '@beaver-ui/components';
-//   import { colors, spacing } from '@<inner-ds>/design-tokens';
+//   import { colors, spacing } from '@tui-react/design-tokens';
 //
 // into:
 //
@@ -58,25 +58,30 @@ export * from '@beaver-ui/subheader';
 export * from '@beaver-ui/table';
 
 // ---------------------------------------------------------------------------
-// Inner-DS primitives + design tokens.
+// Inner-DS components (tier='fallback' in the manifest) — re-exported
+// flat onto window.Beaver alongside Beaver's own components. The agent
+// picks Beaver-tier components first and only reaches for inner-DS when
+// nothing in Beaver fits.
 //
-// FILL IN after the first `pnpm install` — read
-// `node_modules/@beaver-ui/components/package.json` to discover the actual
-// scope name of the inner DS Beaver consumes (it shows up in the resolved
-// dependency graph). Replace `<inner-ds>` below and uncomment.
+// Some inner-DS scopes ship a single barrel package
+// (`@<scope>/components`) that re-exports everything; some don't. If
+// yours doesn't, append per-package `export * from '@<scope>/<name>'`
+// lines below — the bundler dedups duplicate exports, so it's safe to
+// list both barrel and individual sub-packages.
+//
+// If your inner-DS scope is NOT `@tui-react`, search-and-replace it
+// across this file and apps/web/src/runtime/beaver-component.ts's
+// ALLOWED_IMPORT_PREFIXES.
 // ---------------------------------------------------------------------------
 
-// export * from '@<inner-ds>/components';
+export * from '@tui-react/components';
 
-// import * as colors from '@<inner-ds>/design-tokens/colors';
-// import * as spacing from '@<inner-ds>/design-tokens/spacing';
-// import * as typography from '@<inner-ds>/design-tokens/typography';
-// import * as animation from '@<inner-ds>/design-tokens/animation';
+// ---------------------------------------------------------------------------
+// Design tokens — published only by the inner-DS, exposed flat under
+// `window.Beaver.tokens.<group>` so user TSX can do
+// `import { color, spacing } from '@tui-react/design-tokens'` and the
+// iframe import-rewriter resolves them via window.Beaver.tokens.
+// ---------------------------------------------------------------------------
 
-// export const tokens = { colors, spacing, typography, animation };
-
-// Until the inner-DS scope is wired in, we expose an empty tokens object so
-// the iframe rewriter has something to destructure from. The build will
-// fail loudly when the LLM emits a tokens import and finds nothing — that
-// is the desired signal to finish wiring this file.
-export const tokens: Record<string, Record<string, unknown>> = {};
+import * as designTokens from '@tui-react/design-tokens';
+export const tokens: Record<string, unknown> = { ...designTokens };

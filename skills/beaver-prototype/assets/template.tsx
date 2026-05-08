@@ -1,8 +1,8 @@
 // Seed template for the beaver-prototype skill. Always start from here.
 //
 // Rules — see SKILL.md for the full list:
-//   1. Imports only from @beaver-ui/*, @<inner-ds>/components,
-//      @<inner-ds>/design-tokens, react, react-dom.
+//   1. Imports only from @beaver-ui/*, @tui-react/components,
+//      @tui-react/design-tokens, react, react-dom.
 //   2. Components and props only from skills/beaver-prototype/components.json.
 //   3. No raw HTML tags. No hardcoded colors / sizes / fonts.
 //   4. Single file, single default export named `Prototype`.

@@ -39,8 +39,8 @@ After `pnpm install` resolves the Beaver dependency graph:
 1. Inspect `node_modules/@beaver-ui/components/package.json` to find the
    scope name of the inner DS that Beaver consumes (and its
    `design-tokens` package).
-2. Edit `package.json` here — add `@<inner-ds>/components` and
-   `@<inner-ds>/design-tokens` (and any other inner-DS sub-packages) to
+2. Edit `package.json` here — add `@tui-react/components` and
+   `@tui-react/design-tokens` (and any other inner-DS sub-packages) to
    `dependencies`.
 3. Edit `src/index.ts` — uncomment the inner-DS export block, replacing
    `<inner-ds>` with the real scope.
@@ -52,7 +52,7 @@ After `pnpm install` resolves the Beaver dependency graph:
 When you bump Beaver or the inner DS, run:
 
 ```bash
-pnpm up '@beaver-ui/*' '@<inner-ds>/*' && \
+pnpm up '@beaver-ui/*' '@tui-react/*' && \
   pnpm beaver:sync && \
   pnpm --filter @beaver-open-design/beaver-runtime build
 ```

@@ -10,7 +10,7 @@
  *   2. extractProps — for each (package, names[]) pair from step 1, walk
  *      the published .d.ts and pull props with full types, defaults,
  *      enum unions, JSDoc, cross-package refs.
- *   3. extractTokens — walk @inner-ds/design-tokens for frozen-object
+ *   3. extractTokens — walk @tui-react/design-tokens for frozen-object
  *      values, group by top-level export.
  *   4. extractDocs — scan source checkouts (Beaver + inner-DS) for MDX,
  *      JSDoc, READMEs; produce per-component Markdown files.
@@ -32,7 +32,7 @@ import { join, dirname, posix, sep } from 'node:path';
 import { introspectBundle, type IntrospectorKind } from './introspect-bundle.js';
 import { extractProps } from './extract-props.js';
 import { extractTokens } from './extract-tokens.js';
-import { extractDocs } from './extract-docs.js';
+import { extractDocs, type DocFile } from './extract-docs.js';
 import type {
   ExtractorInputs,
   ManifestEntry,
@@ -42,7 +42,7 @@ import type {
 } from './types.js';
 
 const DEFAULT_BEAVER_PRIMARY_SCOPE = '@beaver-ui';
-const DEFAULT_INNER_SCOPE = '@inner-ds';
+const DEFAULT_INNER_SCOPE = '@tui-react';
 
 export interface SyncOptions extends ExtractorInputs {
   /** Override the package scope considered "primary" (Beaver). */
@@ -51,6 +51,8 @@ export interface SyncOptions extends ExtractorInputs {
   innerScope?: string;
   /** Bundle introspector to use. Default 'jsdom'. */
   introspector?: IntrospectorKind;
+  /** Component name to log per-step diagnostics for in extract-props. */
+  debugComponent?: string;
 }
 
 export interface SyncResult {
@@ -101,6 +103,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     packageToNames,
     nodeModulesDir: options.nodeModulesDir,
     isPrimary: (pkg) => pkg.startsWith(primaryScope + '/') || pkg === primaryScope,
+    ...(options.debugComponent ? { debugComponent: options.debugComponent } : {}),
   });
   for (const e of propsResult.errors) {
     errors.push(`extract-props (${e.package}): ${e.error}`);
@@ -121,6 +124,12 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     outDir: docsOutDir,
   });
   errors.push(...docsResult.errors.map((e) => `extract-docs: ${e}`));
+
+  // ─── Cross-link: feed first-paragraph from each DocFile into the
+  // matching ComponentSpec.docSummary if .d.ts JSDoc was empty. This is
+  // why docSummary mostly comes back null when --beaver/--inner aren't
+  // provided: there's no source corpus to mine.
+  hydrateDocSummariesFromDocs(propsResult.specs, docsResult.files);
 
   // ─── Build the lean manifest ───────────────────────────────────────────
   const manifest = buildManifest({
@@ -168,8 +177,8 @@ function buildManifest(args: BuildManifestArgs): Manifest {
       kind: 'unknown', // populated by `pnpm beaver:classify` later
       specPath: posix.join('specs', `${spec.name}.json`),
       ...(docPath ? { docPath: posix.join('docs', toPosix(docPath)) } : {}),
-      ...(spec.description
-        ? { oneLineDescription: firstLine(spec.description) }
+      ...(spec.docSummary
+        ? { docSummary: firstLine(spec.docSummary) }
         : {}),
     });
   }
@@ -273,4 +282,77 @@ function firstLine(s: string): string {
   const trimmed = s.trim();
   const idx = trimmed.indexOf('\n');
   return idx === -1 ? trimmed : trimmed.slice(0, idx);
+}
+
+/**
+ * For each ComponentSpec lacking a docSummary (because the published
+ * .d.ts had no JSDoc), find the matching DocFile and pull its first
+ * paragraph in. Mutates `specs` in place. Idempotent — never overwrites
+ * a docSummary that's already set.
+ *
+ * Match key is `package/name` so docs from the same package as the
+ * component are preferred. If no match — leave as-is.
+ */
+function hydrateDocSummariesFromDocs(
+  specs: ComponentSpec[],
+  docFiles: DocFile[],
+): void {
+  if (docFiles.length === 0) return;
+  const byKey = new Map<string, DocFile>();
+  for (const f of docFiles) {
+    byKey.set(`${f.packageName}/${f.componentName}`, f);
+  }
+  for (const spec of specs) {
+    if (spec.docSummary && spec.docSummary.trim().length > 0) continue;
+    const key = `${spec.package}/${spec.name}`;
+    const doc = byKey.get(key);
+    if (!doc) continue;
+    const summary = firstParagraphFromMarkdown(doc.body);
+    if (summary) spec.docSummary = summary;
+  }
+}
+
+/**
+ * Extract the first prose paragraph from a Markdown blob, skipping
+ * heading lines (`# Foo`), package/metadata lines (`Package: …`), and
+ * front-matter delimiters. Returns undefined when no usable prose is
+ * found.
+ */
+function firstParagraphFromMarkdown(md: string): string | undefined {
+  const lines = md.split(/\r?\n/);
+  let i = 0;
+  // Skip frontmatter
+  if (lines[0]?.trim() === '---') {
+    i = 1;
+    while (i < lines.length && lines[i]?.trim() !== '---') i += 1;
+    i += 1;
+  }
+  const buf: string[] = [];
+  while (i < lines.length) {
+    const line = lines[i] ?? '';
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (buf.length > 0) break;
+      i += 1;
+      continue;
+    }
+    // Skip headings, package metadata lines, "Description" header
+    if (/^#{1,6}\s/.test(trimmed)) {
+      i += 1;
+      continue;
+    }
+    if (/^Package:\s/i.test(trimmed)) {
+      i += 1;
+      continue;
+    }
+    buf.push(trimmed);
+    i += 1;
+  }
+  if (buf.length === 0) return undefined;
+  // Join wrapped lines into one paragraph, strip Markdown emphasis.
+  const para = buf.join(' ').replace(/[*_`]+/g, '').trim();
+  // Truncate to a reasonable summary length so it fits inline in the
+  // manifest's `docSummary`.
+  if (para.length > 240) return para.slice(0, 240).trimEnd() + '…';
+  return para;
 }

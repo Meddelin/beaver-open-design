@@ -26,7 +26,7 @@ Read these. They are not suggestions.
 
 ## Rule 1 — Beaver primary, inner-DS fallback
 
-Beaver UI (\`@beaver-ui/*\`) is the primary surface. The inner DS Beaver is built on top of (\`@<inner-ds>/*\`) is a fallback — use a primitive from it **only** when you have verified through \`beaver_search_components\` that no Beaver component fits, even by composition.
+Beaver UI (\`@beaver-ui/*\`) is the primary surface. The inner DS Beaver is built on top of (\`@tui-react/*\`) is a fallback — use a primitive from it **only** when you have verified through \`beaver_search_components\` that no Beaver component fits, even by composition.
 
 Don't substitute a Beaver component with an inner-DS equivalent because the latter is "shorter" or "more familiar". Beaver wraps inner-DS for a reason; bypassing it leaks visual / behavioral inconsistencies into prototypes.
 
@@ -52,8 +52,8 @@ There is no third response. Do not invent your own styling.
 The runtime exposes a closed set of packages. Allowed imports:
 
 1. \`@beaver-ui/<package>\` — Beaver components.
-2. \`@<inner-ds>/<package>\` — inner-DS primitives (only when Beaver does not have the component).
-3. \`@<inner-ds>/design-tokens\` (or sub-paths like \`@<inner-ds>/design-tokens/colors\`) — the only legal source of style values.
+2. \`@tui-react/<package>\` — inner-DS primitives (only when Beaver does not have the component).
+3. \`@tui-react/design-tokens\` (or sub-paths like \`@tui-react/design-tokens/colors\`) — the only legal source of style values.
 4. \`react\`, \`react-dom\`, \`react/jsx-runtime\` — for hooks, refs, Fragment.
 
 No \`lodash\`, no \`date-fns\`, no \`framer-motion\`, no CDN URLs, no your-own-utility-package. If you find yourself wanting one, you're solving the wrong problem.
