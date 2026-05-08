@@ -232,6 +232,7 @@ async function loadBundleInJsdom(
       buildLoadFailureMessage(
         'Bundle did not assign window.Beaver. Check apps/beaver-runtime/vite.config.ts (name: "Beaver", format: "umd").',
         errors,
+        bundleSource,
       ),
     );
   }
@@ -241,6 +242,7 @@ async function loadBundleInJsdom(
       buildLoadFailureMessage(
         'Bundle assigned window.Beaver but it is empty. The UMD factory likely threw partway through; see collected errors below. Try `--introspector playwright` if JSDOM stubs are insufficient.',
         errors,
+        bundleSource,
       ),
     );
   }
@@ -250,23 +252,90 @@ async function loadBundleInJsdom(
 
 /**
  * Compose a multi-line error message that includes the high-level
- * symptom and any errors we collected from JSDOM during script
- * execution. This is the difference between "Bundle didn't load (?)"
- * and a useful diagnostic.
+ * symptom, any errors we collected from JSDOM/Playwright during script
+ * execution, and (when the error has a parseable line:col) a slice of
+ * the bundle source around the throw site. This is the difference
+ * between "Bundle didn't load (?)" and a useful diagnostic.
+ *
+ * For minified bundles, the source slice still helps — even ±200
+ * chars of minified output usually contains enough surrounding
+ * identifiers to recognize the pattern (e.g. `class N extends ` plus
+ * an undefined identifier).
  */
 function buildLoadFailureMessage(
   symptom: string,
   errors: string[],
+  bundleSource?: string,
 ): string {
   if (errors.length === 0) {
     return `${symptom}\n\n(no errors were observed by JSDOM during script execution; the factory may have early-returned silently)`;
   }
-  return [
+  const lines = [
     symptom,
     '',
     `Errors observed during script execution (${errors.length}):`,
     ...errors.map((e, i) => `  ${i + 1}. ${e}`),
-  ].join('\n');
+  ];
+
+  // Try to extract a (line:col) location from the first error and slice
+  // ±200 chars of the bundle source around it. Even on minified bundles,
+  // 400 chars usually contains enough surrounding identifiers to
+  // recognise the pattern (e.g. "class N extends " followed by an
+  // undefined identifier).
+  if (bundleSource) {
+    const slice = sliceBundleAtFirstErrorLocation(errors, bundleSource);
+    if (slice) {
+      lines.push('');
+      lines.push('Bundle source context around the first error:');
+      lines.push('```');
+      lines.push(slice);
+      lines.push('```');
+      lines.push('');
+      lines.push(
+        'For a non-minified bundle (easier to read context, full identifiers, real line numbers), set BEAVER_DEBUG_BUILD=1 before re-running:',
+      );
+      lines.push('  BEAVER_DEBUG_BUILD=1 pnpm beaver:build-runtime');
+      lines.push('  pnpm beaver:sync');
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function sliceBundleAtFirstErrorLocation(
+  errors: string[],
+  bundleSource: string,
+): string | null {
+  // Common error formats:
+  //   "TypeError: ... at <anonymous>:51:18633"
+  //   "    at <anonymous> (eval at ...:51:18633)"
+  //   "...:LINE:COL"
+  // Just grab the first (LINE:COL) tuple we find.
+  for (const e of errors) {
+    const m = /(\d+):(\d+)/.exec(e);
+    if (!m) continue;
+    const line = parseInt(m[1] ?? '0', 10);
+    const col = parseInt(m[2] ?? '0', 10);
+    if (!Number.isFinite(line) || !Number.isFinite(col) || line < 1) continue;
+
+    // Convert (line, col) to absolute byte offset in source.
+    const sourceLines = bundleSource.split('\n');
+    if (line > sourceLines.length) continue;
+    let offset = 0;
+    for (let i = 0; i < line - 1; i += 1) {
+      offset += (sourceLines[i] ?? '').length + 1; // +1 for newline
+    }
+    offset += col;
+
+    const start = Math.max(0, offset - 200);
+    const end = Math.min(bundleSource.length, offset + 200);
+    const before = bundleSource.slice(start, offset);
+    const after = bundleSource.slice(offset, end);
+    // Mark the position with ⟨HERE⟩ so the local agent sees the exact
+    // point even when it's mid-token.
+    return `${before}⟨HERE⟩${after}`;
+  }
+  return null;
 }
 
 /**
@@ -399,6 +468,33 @@ function makeReactStub(): Record<string, unknown> {
     return obj;
   };
 
+  // Class component bases. CRITICAL: REMOTE-FIX-QUEUE.md #9 was caused by
+  // these missing — when a Beaver/inner-DS component does
+  // `class Foo extends React.Component {}` (or PureComponent), an absent
+  // base class throws "Class extends value undefined is not a constructor
+  // or null" at module-init time, before window.Beaver assignment
+  // completes. Provide minimal class implementations.
+  class Component {
+    public props: unknown;
+    public state: unknown;
+    public context: unknown;
+    public refs: unknown;
+    public updater: unknown;
+    constructor(props?: unknown, context?: unknown) {
+      this.props = props;
+      this.context = context;
+      this.refs = {};
+      this.state = {};
+      this.updater = null;
+    }
+    setState(): void {}
+    forceUpdate(): void {}
+    render(): unknown {
+      return null;
+    }
+  }
+  class PureComponent extends Component {}
+
   return {
     version: '18.3.1',
     createContext,
@@ -409,6 +505,8 @@ function makeReactStub(): Record<string, unknown> {
     forwardRef,
     memo,
     lazy,
+    Component,
+    PureComponent,
     Fragment: Symbol.for('react.fragment'),
     StrictMode: Symbol.for('react.strict_mode'),
     Suspense: Symbol.for('react.suspense'),
@@ -607,6 +705,7 @@ async function loadBundleInPlaywright(
         buildLoadFailureMessage(
           'Bundle assigned window.Beaver but it is empty (Playwright introspector). The UMD factory likely threw partway through.',
           errors,
+          bundleSource,
         ),
       );
     }
@@ -653,8 +752,28 @@ function makeBrowserStubsBoot(): string {
     var noop = function(){ return undefined; };
     var identity = function(x){ return x; };
 
+    // Class component bases — see REMOTE-FIX-QUEUE.md #9. Without these,
+    // any DS component using \`class Foo extends React.Component\` throws
+    // "Class extends value undefined is not a constructor or null" at
+    // module-init.
+    function ReactComponent(props, context){
+      this.props = props;
+      this.context = context;
+      this.refs = {};
+      this.state = {};
+      this.updater = null;
+    }
+    ReactComponent.prototype.setState = noop;
+    ReactComponent.prototype.forceUpdate = noop;
+    ReactComponent.prototype.render = function(){ return null; };
+    function ReactPureComponent(){ ReactComponent.apply(this, arguments); }
+    ReactPureComponent.prototype = Object.create(ReactComponent.prototype);
+    ReactPureComponent.prototype.constructor = ReactPureComponent;
+
     var React = {
       version: '18.3.1',
+      Component: ReactComponent,
+      PureComponent: ReactPureComponent,
       createContext: function(d){ return { Provider: function(p){ return p && p.children; }, Consumer: function(p){ return typeof p?.children==='function' ? p.children(d) : null; }, displayName: '', _currentValue: d }; },
       createRef: function(){ return { current: null }; },
       createElement: noop,

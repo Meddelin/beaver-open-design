@@ -284,4 +284,86 @@ Test with explicit `process.stdout.write()` after `server.connect()` to verify t
 
 Fix: replace `process.exit(0)` with `process.stdout.end(() => process.exit(0))`. The `end()` callback fires after all buffered data has been flushed to the underlying pipe. Comment in code documents the rationale (so future readers don't "simplify" it back to a bare exit).
 
-The same buffering trap is the reason this only manifested in the one-shot pipe smoke test. In long-lived parent (qwen-code spawning the server and holding stdin open), the SDK's stdout writes happen on a live transport and are flushed naturally — no truncation. So this fix is for diagnostic / smoke-test usage; production flows weren't affected, but the smoke test is what people run first.
+The same buffering trap is the reason this only manifested in the one-shot pipe smoke test. In long-lived parent (qwen-code spawning the server and holding stdin open), the MCP response happens on a live transport and is flushed naturally — no truncation. So this fix is for diagnostic / smoke-test usage; production flows weren't affected, but the smoke test is what people run first.
+
+---
+
+### #9 — UMD bundle introspection fails in both JSDOM and Playwright
+
+**File:** `packages/beaver-spec-extractor/src/introspect-bundle.ts`
+**Symptom:** `pnpm beaver:sync` fails immediately with error:
+```
+beaver:sync failed: Error: Bundle assigned window.Beaver but it is empty.
+Errors observed during script execution (1):
+  1. [jsdomError] TypeError: Class extends value undefined is not a constructor or null
+```
+Same error occurs with `--introspector playwright`.
+
+**Reproduction:**
+  - Build runtime: `pnpm beaver:build-runtime` (produces ~1.6 MB UMD bundle)
+  - Run: `pnpm beaver:sync` or `pnpm beaver:sync -- --introspector playwright`
+  - Both fail with "Class extends value undefined is not a constructor or null"
+
+**Severity:** blocker — spec extractor cannot introspect the bundle, so no components, props, or tokens can be extracted. The v2.1 fixes (#4-#8) cannot be validated.
+
+**Workaround applied:** none — proceeding with stale data from previous sync (112 components with empty props and "any" token values).
+
+**Notes for the remote:** The UMD bundle builds successfully (~1.6 MB) but throws when evaluated in either JSDOM or Playwright. The error "Class extends value undefined is not a constructor or null" at bundle position ~51:18633 suggests a class inheritance chain where a base class wasn't properly imported/bundled.
+
+Possible root causes:
+1. Vite/Rollup is treating some `@beaver-ui/*` or `@tui-react/*` packages as external when they should be bundled
+2. Circular dependency causing a class to be undefined at init time
+3. React stub in `introspect-bundle.ts` missing a critical API that components extend
+
+The React stub in `introspect-bundle.ts` (lines 370-460) covers React 18 APIs including `forwardRef`, `memo`, `lazy`, hooks, etc. However, it may not cover something specific that Beaver UI or TUI React components extend.
+
+**Diagnostic data:**
+- Bundle size: 1.66 MB (1,662,680 bytes)
+- Bundle format: UMD with `name: 'Beaver'`
+- External deps: `react`, `react-dom`, `react/jsx-runtime` (intentional)
+- Error location: minified bundle, position ~18633 in line 51
+- Both JSDOM and Playwright fail identically
+
+**Suggested fix approaches:**
+1. Add bundle analysis to identify which module is throwing
+2. Temporarily build a non-minified bundle with sourcemaps for debugging
+3. Check if any `@beaver-ui/*` or `@tui-react/*` packages have peer dependencies not being satisfied
+4. Consider a hybrid approach: extract component names from `apps/beaver-runtime/src/index.ts` exports instead of runtime introspection when bundle load fails
+
+**Status: RESOLVED (most likely root cause + diagnostics).** "Class extends value undefined is not a constructor or null" almost certainly comes from a DS component declaring `class Foo extends React.Component {}` (or `PureComponent`) — and the React stub I shipped in commits `c918a89` / `f1f71c9` covered the entire React 18 functional surface (hooks, forwardRef, memo, lazy, Suspense, Children, internals), but **omitted the `Component` and `PureComponent` classes**. When the bundle does `class N extends e.Component`, `e.Component` is `undefined`, JS throws this exact error. Ship a fix:
+
+1. **Add `Component` and `PureComponent` to both stubs.**
+   - `makeReactStub` (JSDOM path): two real ES6 classes with the
+     conventional shape (`props`, `state`, `context`, `refs`,
+     `updater`, `setState`, `forceUpdate`, `render`). `PureComponent`
+     extends `Component` so any `instanceof` checks behave naturally.
+   - Playwright stub script: `ReactComponent` / `ReactPureComponent`
+     constructor functions with the same prototype methods, both
+     attached to the `React` global.
+
+2. **Bundle source context dump on failure.** When the introspector
+   throws "bundle is empty", `buildLoadFailureMessage` now extracts the
+   first `(line:col)` from the collected errors, slices ±200 chars of
+   the bundle source around that offset, and includes it in the
+   exception with a `⟨HERE⟩` marker. Even on minified output the
+   surrounding identifiers usually reveal the pattern (e.g. literal
+   `class N extends e.X{` reveals which `e.X` was undefined).
+
+3. **`BEAVER_DEBUG_BUILD=1` env in `apps/beaver-runtime/vite.config.ts`.**
+   When set, the Vite library build produces a non-minified UMD with
+   sourcemaps. Use this if the minified context dump isn't enough to
+   identify the bad class:
+   ```bash
+   BEAVER_DEBUG_BUILD=1 pnpm beaver:build-runtime
+   pnpm beaver:sync
+   ```
+
+If `class extends undefined` persists after this fix, the next
+`buildLoadFailureMessage` exception will tell you what specific
+identifier is undefined — file a new queue entry with the slice text.
+
+The hybrid approach the local agent suggested (#4 — extract names
+from `apps/beaver-runtime/src/index.ts`) is a reasonable last-resort
+fallback for environments where the bundle simply will not load.
+Holding it back as a deliberate degradation path; not implemented now
+because the root-cause fix above is the right cure.
